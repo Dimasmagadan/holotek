@@ -2,7 +2,6 @@ import logging
 import threading
 import time
 
-import objc
 import AppKit
 from Foundation import NSObject, NSTimer, NSRunLoop, NSDefaultRunLoopMode
 
@@ -27,6 +26,12 @@ class _AppDelegate(NSObject):
     def applicationDidFinishLaunching_(self, notification):
         self._app_ref.on_launched()
 
+    def tick_(self, timer):
+        self._app_ref._update_ui(timer)
+
+    def quit_(self, sender):
+        self._app_ref._quit(sender)
+
 
 class HolotekApp:
     def __init__(self, config_path="config.json"):
@@ -39,6 +44,7 @@ class HolotekApp:
         self._latest_time = None
         self._pending_notify = None
         self._status_item = None
+        self._delegate = None
 
     def on_launched(self):
         status_bar = AppKit.NSStatusBar.systemStatusBar()
@@ -55,9 +61,9 @@ class HolotekApp:
             "", None, ""
         )
         quit_item = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-            "Quit", objc.selector(self._quit, signature=b"v@:@"), ""
+            "Quit", b"quit:", ""
         )
-        quit_item.setTarget_(self)
+        quit_item.setTarget_(self._delegate)
 
         menu.addItem_(self._info_item)
         menu.addItem_(self._time_item)
@@ -69,7 +75,7 @@ class HolotekApp:
         threading.Thread(target=self._poll_loop, daemon=True).start()
 
         self._timer = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
-            1.0, self, objc.selector(self._update_ui, signature=b"v@:@"), None, True
+            1.0, self._delegate, b"tick:", None, True
         )
         NSRunLoop.currentRunLoop().addTimer_forMode_(self._timer, NSDefaultRunLoopMode)
 
@@ -139,6 +145,7 @@ class HolotekApp:
 
         delegate = _AppDelegate.alloc().init()
         delegate._app_ref = self
+        self._delegate = delegate
         app.setDelegate_(delegate)
 
         app.run()

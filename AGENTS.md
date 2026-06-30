@@ -13,7 +13,9 @@ verified `co2meter` source.
 
 Python CLI daemon (`holotek.py`) that reads CO2 ppm from a USB zyTemp HID device
 on macOS and fires `osascript` notifications on zone transitions. Single-file
-core; `config.json` is hot-reloaded every poll. Menu-bar mode is deferred.
+core; `config.json` is hot-reloaded every poll. Menu-bar mode (`menubar.py`,
+`--menubar`) is built on raw AppKit/PyObjC and shares `load_config`/`zone`/
+`decide`/`read_ppm` with the CLI path.
 
 ## Non-obvious facts an agent will get wrong
 
@@ -29,6 +31,17 @@ core; `config.json` is hot-reloaded every poll. Menu-bar mode is deferred.
   the brew `libusb`/`hidapi` user-space libs.
 - **`hid` vs `hidapi` PyPI trap.** If import throws a `windll` AttributeError,
   `pip uninstall hid` (wrong package), then `pip install hidapi`.
+- **PyObjC delivers selectors only to NSObject targets.** In `menubar.py` the
+  `NSTimer` tick and the Quit `NSMenuItem` must target the `_AppDelegate`
+  (an `NSObject`), NOT the plain-Python `HolotekApp`. Targeting a non-Cocoa
+  object silently no-ops — the timer never fires (menu stuck on "starting…")
+  and Quit does nothing. The delegate forwards to `HolotekApp`.
+- **Build the menu bar item AFTER launch.** Create the `NSStatusItem` in
+  `applicationDidFinishLaunching_`, not before `NSApplication.run()` — on recent
+  macOS an item created pre-launch may never appear. Use
+  `NSApplicationActivationPolicyAccessory` (no Dock icon).
+- **Don't use a black glyph for the green/idle state.** A black circle is
+  invisible on the dark menu bar; markers are colored emoji (🟢🟡🔴).
 
 ## Prerequisites (macOS — run before anything works)
 
@@ -50,8 +63,10 @@ sudo python3 -c "import co2meter; m=co2meter.CO2monitor(); print(m.read_data())"
   yellow/red repeats.
 - Config keys match `config.json` exactly (`poll_interval_seconds`,
   `notification_cooldown_seconds`, etc.); bad JSON must not crash the daemon.
-- Menu-bar path, if ever built, must NOT reuse the `while True` loop — `rumps`
-  owns the mainloop. Share `load_config`/`zone` between both entry points.
+- Menu-bar path does NOT reuse the CLI `while True` loop — `NSApplication`
+  owns the main run loop; polling runs on a daemon thread, the `NSTimer`
+  pushes readings to the UI. Both entry points share `load_config`/`zone`/
+  `decide`/`read_ppm`.
 
 ## zyTemp HID protocol (rev 2.00)
 
