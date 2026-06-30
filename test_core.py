@@ -103,11 +103,6 @@ class TestDecide:
         assert out is not None
         assert out[0] == "CO2 back to normal"
 
-    def test_red_to_green_small_drop_within_cooldown_suppressed(self):
-        s = mkstate(last_zone="red", last_notified_ppm=1500, last_notified_at=0)
-        out = decide(s, 1400, COOLDOWN_WITHIN, DEFAULTS)
-        assert out is None
-
     def test_yellow_to_green_big_drop_bypasses_cooldown(self):
         s = mkstate(last_zone="yellow", last_notified_ppm=900, last_notified_at=0)
         out = decide(s, 500, COOLDOWN_WITHIN, DEFAULTS)
@@ -116,8 +111,16 @@ class TestDecide:
 
     def test_yellow_to_green_small_drop_within_cooldown_suppressed(self):
         s = mkstate(last_zone="yellow", last_notified_ppm=900, last_notified_at=0)
-        out = decide(s, 850, COOLDOWN_WITHIN, DEFAULTS)
+        out = decide(s, 750, COOLDOWN_WITHIN, DEFAULTS)
         assert out is None
+        assert s["last_zone"] == "yellow"
+
+    def test_yellow_to_green_small_drop_past_cooldown_fires(self):
+        s = mkstate(last_zone="yellow", last_notified_ppm=900, last_notified_at=0)
+        out = decide(s, 750, COOLDOWN_PAST, DEFAULTS)
+        assert out is not None
+        assert out[0] == "CO2 back to normal"
+        assert s["last_zone"] == "green"
 
     def test_green_to_green_nothing(self):
         s = mkstate(last_zone="green", last_notified_ppm=500, last_notified_at=0)

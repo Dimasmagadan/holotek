@@ -81,7 +81,8 @@ def decide(state, ppm, now, cfg):
             fire = True
 
     if not fire:
-        state["last_zone"] = z
+        if not (curr_zone == "green" and prev_zone in ("yellow", "red")):
+            state["last_zone"] = z
         return None
 
     title = MESSAGES.get((prev_zone, z), f"CO2 {z.upper()}")
