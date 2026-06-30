@@ -35,7 +35,7 @@ python3 holotek.py [--config path/to/config.json]
 |---|---|---|---|
 | `thresholds.green_max` | 800 | integer ≥ 0 | upper bound for green zone (ppm) |
 | `thresholds.yellow_max` | 1200 | integer ≥ green_max | upper bound for yellow zone (ppm) |
-| `poll_interval_seconds` | 120 | 60–300 | seconds between sensor reads |
+| `poll_interval_seconds` | 120 | > 0 | seconds between sensor reads |
 | `notification_cooldown_seconds` | 1800 | ≥ 0 | min seconds between repeat alert notifications |
 | `green_reentry_drop_ppm` | 200 | ≥ 0 | ppm drop that triggers immediate "back to normal" inside cooldown |
 | `bypass_decrypt` | false | boolean | skip XOR decryption for unencrypted device variants |

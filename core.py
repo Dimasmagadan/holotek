@@ -95,7 +95,7 @@ def decide(state, ppm, now, cfg):
 
 
 def read_ppm(mon, retries=3):
-    """Read one CO2 value; retry on None (no CO2 packet in max_requests)."""
+    """Read one CO2 value; retry on None up to `retries` times."""
     for _ in range(retries):
         try:
             _, ppm, _ = mon.read_data_raw()
