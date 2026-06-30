@@ -1,6 +1,6 @@
 import time
 import pytest
-from core import decide, zone, validate, load_config, CONFIG_PATH, MESSAGES
+from core import decide, zone, validate, load_config, CONFIG_PATH, MESSAGES, marker_for
 
 
 DEFAULTS = {
@@ -247,3 +247,19 @@ class TestValidate:
         v["green_reentry_drop_ppm"] = -1
         with pytest.raises(ValueError):
             validate(v)
+
+
+# ── marker_for() ─────────────────────────────────────────────────────────────
+
+class TestMarker:
+    def test_green(self):
+        assert marker_for("green") == "\u26AA"
+
+    def test_yellow(self):
+        assert marker_for("yellow") == "\U0001F7E1"
+
+    def test_red(self):
+        assert marker_for("red") == "\U0001F534"
+
+    def test_unknown_fallback(self):
+        assert marker_for("bogus") == "\u26AA"

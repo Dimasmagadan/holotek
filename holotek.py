@@ -20,8 +20,14 @@ def _backoff_sleep(attempt, cap=60, base=10):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default="config.json")
+    ap.add_argument("--menubar", action="store_true", help="run as menu-bar app")
     args = ap.parse_args()
     config_path = args.config
+
+    if args.menubar:
+        from menubar import HolotekApp
+        HolotekApp(config_path=config_path).run()
+        return
 
     logging.basicConfig(level=logging.INFO)
 

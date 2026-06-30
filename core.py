@@ -119,6 +119,13 @@ def read_ppm(mon, retries=3):
     return None
 
 
+MARKERS = {"green": "\u26AA", "yellow": "\U0001F7E1", "red": "\U0001F534"}
+
+
+def marker_for(zone_name):
+    return MARKERS.get(zone_name, "\u26AA")
+
+
 def send_notification(title, body):
     """Fire a macOS notification via osascript. Fixed 2-arg signature."""
     esc = lambda s: str(s).replace("\\", "\\\\").replace('"', '\\"')
