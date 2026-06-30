@@ -1,0 +1,10 @@
+{
+  "thresholds": {
+    "green_max": 800,
+    "yellow_max": 1200
+  },
+  "poll_interval_seconds": 120,
+  "notification_cooldown_seconds": 1800,
+  "green_reentry_drop_ppm": 200,
+  "bypass_decrypt": false
+}
