@@ -3,9 +3,12 @@
 ## Status: greenfield
 
 No commits, no source yet. This repo is a planned-but-unbuilt Python CLI daemon.
-Authoritative design: `.mimocode/plans/1782807237673-holotek-sdd.md` (SDD v3).
-**Do NOT trust `…722-playful-mountain.md` (v1)** — its HID protocol section
-guesses a TEMPer-style init command and is explicitly superseded by v3.
+Authoritative design: `.mimocode/plans/holotek-sdd-v4.md` (SDD v4).
+**Do NOT trust `…7673-holotek-sdd.md` (v3)** or `…722-playful-mountain.md` (v1):
+v3's core loop had four bugs (unsatisfiable `co2meter>=1.0.0` pin, pandas-
+conditional `read_data()` return type, no `None` guard, first-sample alert),
+and v1 guessed a TEMPer-style init command. v4 fixes all of these against the
+verified `co2meter` source.
 
 ## What holotek is
 
