@@ -1,6 +1,7 @@
 import time
 import pytest
-from core import decide, zone, validate, load_config, CONFIG_PATH, MESSAGES, marker_for
+from unittest.mock import patch, MagicMock
+from core import decide, zone, validate, load_config, CONFIG_PATH, MESSAGES, marker_for, read_sensors, detect_trend
 
 
 DEFAULTS = {
@@ -263,3 +264,162 @@ class TestMarker:
 
     def test_unknown_fallback(self):
         assert marker_for("bogus") == "\u25CF"
+
+
+# \u2500\u2500 read_sensors() \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+
+def _make_packet(op, val):
+    val_hi = (val >> 8) & 0xFF
+    val_lo = val & 0xFF
+    chk = (op + val_hi + val_lo) & 0xFF
+    return [op, val_hi, val_lo, chk, 0x0D, 0, 0, 0]
+
+
+def _make_mon(path=b"/dev/fake"):
+    mon = MagicMock()
+    mon._info = {"path": path}
+    return mon
+
+
+class TestReadSensors:
+    def _mock_hid(self, packets):
+        h = MagicMock()
+        h.read.side_effect = packets + [[]]
+        dev_cls = MagicMock(return_value=h)
+        return dev_cls, h
+
+    def test_returns_co2_ppm(self):
+        dev_cls, _ = self._mock_hid([_make_packet(0x50, 750)])
+        with patch("hid.device", dev_cls):
+            ppm, temp = read_sensors(_make_mon())
+        assert ppm == 750
+        assert temp is None
+
+    def test_returns_both_co2_and_temp(self):
+        # val=4722 \u2192 4722 * 0.0625 - 273.15 = 22.0125
+        packets = [_make_packet(0x50, 750), _make_packet(0x42, 4722)]
+        dev_cls, _ = self._mock_hid(packets)
+        with patch("hid.device", dev_cls):
+            ppm, temp = read_sensors(_make_mon())
+        assert ppm == 750
+        assert temp == pytest.approx(4722 * 0.0625 - 273.15, abs=0.01)
+
+    def test_temp_conversion_formula(self):
+        packets = [_make_packet(0x50, 800), _make_packet(0x42, 4739)]
+        dev_cls, _ = self._mock_hid(packets)
+        with patch("hid.device", dev_cls):
+            _, temp = read_sensors(_make_mon())
+        assert temp == pytest.approx(4739 * 0.0625 - 273.15, abs=0.01)
+
+    def test_bad_end_marker_skipped(self):
+        bad = [0x50, 0x02, 0xEE, 0x40, 0xFF, 0, 0, 0]  # end != 0x0D
+        good = _make_packet(0x50, 750)
+        dev_cls, _ = self._mock_hid([bad, good])
+        with patch("hid.device", dev_cls):
+            ppm, _ = read_sensors(_make_mon())
+        assert ppm == 750
+
+    def test_bad_checksum_skipped(self):
+        bad = _make_packet(0x50, 750)
+        bad[3] = 0x00  # corrupt checksum
+        good = _make_packet(0x50, 900)
+        dev_cls, _ = self._mock_hid([bad, good])
+        with patch("hid.device", dev_cls):
+            ppm, _ = read_sensors(_make_mon())
+        assert ppm == 900
+
+    def test_open_failure_returns_none_none(self):
+        dev_cls = MagicMock()
+        dev_cls.return_value.open_path.side_effect = OSError("no device")
+        with patch("hid.device", dev_cls):
+            ppm, temp = read_sensors(_make_mon(), retries=1)
+        assert ppm is None
+        assert temp is None
+
+    def test_read_ppm_shim_returns_integer(self):
+        from core import read_ppm
+        dev_cls, _ = self._mock_hid([_make_packet(0x50, 650)])
+        with patch("hid.device", dev_cls):
+            result = read_ppm(_make_mon())
+        assert result == 650
+
+
+# \u2500\u2500 detect_trend() \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+
+TREND_CFG = {
+    **DEFAULTS,
+    "trend_window_seconds": 600,
+    "trend_alert_ppm_per_min": 5.0,
+    "trend_cooldown_seconds": 1800,
+}
+
+
+def mktrend():
+    return {"last_zone": None, "last_notified_at": None, "last_notified_ppm": None}
+
+
+class TestDetectTrend:
+    def test_single_reading_returns_none(self):
+        s = mktrend()
+        assert detect_trend(s, 700, 0.0, TREND_CFG) is None
+
+    def test_less_than_one_minute_elapsed_returns_none(self):
+        s = mktrend()
+        detect_trend(s, 700, 0.0, TREND_CFG)
+        # 30s later, even with a big jump, elapsed < 1 min
+        assert detect_trend(s, 800, 30.0, TREND_CFG) is None
+
+    def test_rising_fires_when_rate_exceeds_threshold(self):
+        s = mktrend()
+        t0 = 0.0
+        detect_trend(s, 700, t0, TREND_CFG)
+        # 10 minutes later, +100 ppm \u2192 10 ppm/min > 5.0 threshold
+        result = detect_trend(s, 800, t0 + 600.0, TREND_CFG)
+        assert result == "rising"
+
+    def test_falling_fires_when_rate_below_negative_threshold(self):
+        s = mktrend()
+        t0 = 0.0
+        detect_trend(s, 900, t0, TREND_CFG)
+        result = detect_trend(s, 800, t0 + 600.0, TREND_CFG)
+        assert result == "falling"
+
+    def test_stable_co2_returns_none(self):
+        s = mktrend()
+        t0 = 0.0
+        detect_trend(s, 700, t0, TREND_CFG)
+        # Only 1 ppm/min \u2014 below 5.0 threshold
+        result = detect_trend(s, 710, t0 + 600.0, TREND_CFG)
+        assert result is None
+
+    def test_old_entries_pruned_outside_window(self):
+        s = mktrend()
+        # old reading at t=0
+        detect_trend(s, 700, 0.0, TREND_CFG)
+        # advance 601s past window \u2014 old entry pruned
+        # new reading at t=601, second at t=601+30s: not enough elapsed (30s < 1min)
+        detect_trend(s, 750, 601.0, TREND_CFG)
+        result = detect_trend(s, 760, 631.0, TREND_CFG)
+        assert result is None  # only 30s elapsed since t0 in pruned window
+
+    def test_cooldown_suppresses_repeat_alert(self):
+        s = mktrend()
+        t0 = 0.0
+        detect_trend(s, 700, t0, TREND_CFG)
+        # First alert fires
+        result1 = detect_trend(s, 800, t0 + 600.0, TREND_CFG)
+        assert result1 == "rising"
+        # Second call within cooldown (1800s) suppressed
+        result2 = detect_trend(s, 900, t0 + 601.0, TREND_CFG)
+        assert result2 is None
+
+    def test_cooldown_expires_and_refires(self):
+        s = mktrend()
+        t0 = 0.0
+        detect_trend(s, 700, t0, TREND_CFG)
+        detect_trend(s, 800, t0 + 600.0, TREND_CFG)  # fires, sets trend_last_notified_at=600
+        # Intermediate reading keeps history alive for the next window
+        detect_trend(s, 850, t0 + 1800.0, TREND_CFG)  # within cooldown, suppressed
+        # t=2400: cooldown elapsed (2400-600=1800, not < 1800); hist has [1800→2400] in window
+        result = detect_trend(s, 1000, t0 + 2400.0, TREND_CFG)
+        assert result == "rising"

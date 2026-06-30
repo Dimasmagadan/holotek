@@ -1,6 +1,7 @@
 import json
 import subprocess
 import time
+from collections import deque
 
 CONFIG_PATH = "config.json"
 SEVERITY = {"green": 0, "yellow": 1, "red": 2}
@@ -94,29 +95,42 @@ def decide(state, ppm, now, cfg):
     return title, f"{ppm} ppm"
 
 
-def read_ppm(mon, retries=3):
-    """Read one CO2 value via direct HID (bypass co2meter's magic-table send)."""
+def read_sensors(mon, retries=3):
+    """Return (co2_ppm, temp_c) from direct HID read. Either may be None."""
     import hid
     for _ in range(retries):
         try:
             h = hid.device()
             h.open_path(mon._info["path"])
         except Exception:
-            return None
+            return None, None
         try:
+            ppm = temp_c = None
             for _ in range(20):
                 raw = h.read(8, timeout_ms=2000)
                 if not raw:
                     break
                 op, val_hi, val_lo, chk, end = raw[0], raw[1], raw[2], raw[3], raw[4]
-                if op != 0x50 or end != 0x0D or raw[5] != 0 or raw[6] != 0 or raw[7] != 0:
+                if end != 0x0D or raw[5] != 0 or raw[6] != 0 or raw[7] != 0:
                     continue
                 if (op + val_hi + val_lo) & 0xFF != chk:
                     continue
-                return (val_hi << 8) | val_lo
+                val = (val_hi << 8) | val_lo
+                if op == 0x50:
+                    ppm = val
+                elif op == 0x42:
+                    temp_c = val * 0.0625 - 273.15
+                if ppm is not None and temp_c is not None:
+                    break
+            if ppm is not None:
+                return ppm, temp_c
         finally:
             h.close()
-    return None
+    return None, None
+
+
+def read_ppm(mon, retries=3):
+    return read_sensors(mon, retries)[0]
 
 
 MARKERS = {"green": "\u25CF", "yellow": "\U0001F7E1", "red": "\U0001F534"}
@@ -131,3 +145,30 @@ def send_notification(title, body):
     esc = lambda s: str(s).replace("\\", "\\\\").replace('"', '\\"')
     script = f'display notification "{esc(body)}" with title "{esc(title)}"'
     subprocess.run(["osascript", "-e", script], check=False)
+
+
+def detect_trend(state, ppm, now, cfg):
+    """Return 'rising' | 'falling' | None based on recent ppm history. Updates state."""
+    window = cfg.get("trend_window_seconds", 600)
+    threshold = cfg.get("trend_alert_ppm_per_min", 5.0)
+    cooldown = cfg.get("trend_cooldown_seconds", 1800)
+
+    hist = state.setdefault("trend_history", deque())
+    hist.append((now, ppm))
+    while hist and (now - hist[0][0]) > window:
+        hist.popleft()
+
+    last = state.get("trend_last_notified_at")
+    if last is not None and (now - last) < cooldown:
+        return None
+    if len(hist) < 2:
+        return None
+    t0, p0 = hist[0]
+    elapsed = (now - t0) / 60.0
+    if elapsed < 1.0:
+        return None
+    rate = (ppm - p0) / elapsed
+    if abs(rate) >= threshold:
+        state["trend_last_notified_at"] = now
+        return "rising" if rate > 0 else "falling"
+    return None

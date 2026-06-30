@@ -1,3 +1,4 @@
 hidapi>=0.14.0
 co2meter>=0.2.6
 pyobjc-framework-Cocoa>=10.0
+pyobjc-framework-UserNotifications>=10.0

@@ -3,9 +3,9 @@ import threading
 import time
 
 import AppKit
-from Foundation import NSObject, NSTimer, NSRunLoop, NSDefaultRunLoopMode
+from Foundation import NSObject, NSTimer, NSRunLoop, NSDefaultRunLoopMode, NSBundle
 
-from core import load_config, zone, decide, read_ppm
+from core import load_config, zone, decide, read_sensors, detect_trend
 
 log = logging.getLogger("holotek.menubar")
 
@@ -40,13 +40,31 @@ class HolotekApp:
         self.mon = None
         self.state = {"last_zone": None, "last_notified_at": None, "last_notified_ppm": None}
         self._latest_ppm = None
+        self._latest_temp = None
         self._latest_zone = None
         self._latest_time = None
-        self._pending_notify = None
+        self._pending_notify = []
         self._status_item = None
         self._delegate = None
+        self._un_center = None
 
     def on_launched(self):
+        # Set bundle identifier so UNUserNotificationCenter can deliver notifications
+        _bi = NSBundle.mainBundle().infoDictionary()
+        if _bi is not None and not _bi.get("CFBundleIdentifier"):
+            _bi["CFBundleIdentifier"] = "com.holotek.menubar"
+
+        try:
+            import UserNotifications as UN
+            center = UN.UNUserNotificationCenter.currentNotificationCenter()
+            center.requestAuthorizationWithOptions_completionHandler_(
+                UN.UNAuthorizationOptionAlert | UN.UNAuthorizationOptionSound,
+                lambda granted, err: log.info("notification auth granted=%s", granted),
+            )
+            self._un_center = center
+        except Exception as e:
+            log.warning("UNUserNotificationCenter unavailable: %s", e)
+
         status_bar = AppKit.NSStatusBar.systemStatusBar()
         self._status_item = status_bar.statusItemWithLength_(AppKit.NSVariableStatusItemLength)
         btn = self._status_item.button()
@@ -57,6 +75,9 @@ class HolotekApp:
         self._info_item = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
             "starting…", None, ""
         )
+        self._temp_item = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "", None, ""
+        )
         self._time_item = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
             "", None, ""
         )
@@ -66,6 +87,7 @@ class HolotekApp:
         quit_item.setTarget_(self._delegate)
 
         menu.addItem_(self._info_item)
+        menu.addItem_(self._temp_item)
         menu.addItem_(self._time_item)
         menu.addItem_(AppKit.NSMenuItem.separatorItem())
         menu.addItem_(quit_item)
@@ -108,36 +130,58 @@ class HolotekApp:
                     time.sleep(self.cfg.get("poll_interval_seconds", 120))
                     continue
 
-            ppm = read_ppm(self.mon)
+            ppm, temp_c = read_sensors(self.mon)
             if ppm is None:
                 log.warning("no CO2 reading this tick")
             else:
                 z = zone(ppm, self.cfg["thresholds"])
                 self._latest_ppm = ppm
+                self._latest_temp = temp_c
                 self._latest_zone = z
                 self._latest_time = time.strftime("%H:%M:%S")
                 now = time.time()
                 out = decide(self.state, ppm, now, self.cfg)
                 log.info("CO2=%s ppm zone=%s notify=%s", ppm, z, bool(out))
                 if out:
-                    self._pending_notify = out
+                    self._pending_notify.append(out)
+                trend = detect_trend(self.state, ppm, now, self.cfg)
+                if trend == "rising":
+                    self._pending_notify.append(("CO₂ rising fast", f"{ppm} ppm"))
 
             time.sleep(self.cfg.get("poll_interval_seconds", 120))
+
+    def _deliver_notification(self, title, body):
+        if self._un_center is not None:
+            try:
+                import UserNotifications as UN
+                content = UN.UNMutableNotificationContent.alloc().init()
+                content.setTitle_(title)
+                content.setBody_(body)
+                req = UN.UNNotificationRequest.requestWithIdentifier_content_trigger_(
+                    f"holotek-{time.time()}", content, None
+                )
+                self._un_center.addNotificationRequest_withCompletionHandler_(
+                    req, lambda err: None
+                )
+                return
+            except Exception as e:
+                log.warning("UNUserNotificationCenter delivery failed: %s", e)
+        note = AppKit.NSUserNotification.alloc().init()
+        note.setTitle_(title)
+        note.setInformativeText_(body)
+        AppKit.NSUserNotificationCenter.defaultUserNotificationCenter().deliverNotification_(note)
 
     def _update_ui(self, timer):
         z = self._latest_zone or "green"
         self._status_item.button().setTitle_(MARKERS.get(z, MARKERS["green"]))
         if self._latest_ppm is not None:
             self._info_item.setTitle_(f"CO₂: {self._latest_ppm} ppm ({self._latest_zone or ''})")
+            if self._latest_temp is not None:
+                self._temp_item.setTitle_(f"Temp: {self._latest_temp:.1f}°C")
             self._time_item.setTitle_(f"as of {self._latest_time}")
-        if self._pending_notify:
-            title, body = self._pending_notify
-            self._pending_notify = None
-            AppKit.NSUserNotificationCenter.defaultUserNotificationCenter()
-            note = AppKit.NSUserNotification.alloc().init()
-            note.setTitle_(title)
-            note.setInformativeText_(body)
-            AppKit.NSUserNotificationCenter.defaultUserNotificationCenter().deliverNotification_(note)
+        while self._pending_notify:
+            title, body = self._pending_notify.pop(0)
+            self._deliver_notification(title, body)
 
     def run(self):
         app = AppKit.NSApplication.sharedApplication()

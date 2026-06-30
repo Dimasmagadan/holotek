@@ -6,5 +6,8 @@
   "poll_interval_seconds": 120,
   "notification_cooldown_seconds": 1800,
   "green_reentry_drop_ppm": 200,
-  "bypass_decrypt": false
+  "bypass_decrypt": false,
+  "trend_window_seconds": 600,
+  "trend_alert_ppm_per_min": 5.0,
+  "trend_cooldown_seconds": 1800
 }

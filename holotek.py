@@ -8,7 +8,7 @@ import time
 
 import co2meter
 
-from core import load_config, zone, decide, read_ppm, send_notification
+from core import load_config, zone, decide, read_ppm, send_notification, detect_trend
 
 log = logging.getLogger("holotek")
 
@@ -117,10 +117,14 @@ def main():
             time.sleep(cfg["poll_interval_seconds"])
             continue
 
-        out = decide(state, ppm, time.time(), cfg)
+        now = time.time()
+        out = decide(state, ppm, now, cfg)
         log.info("CO2=%s ppm zone=%s notify=%s", ppm, zone(ppm, cfg["thresholds"]), bool(out))
         if out:
             send_notification(out[0], out[1])
+        trend = detect_trend(state, ppm, now, cfg)
+        if trend == "rising":
+            send_notification("CO₂ rising fast", f"{ppm} ppm")
         time.sleep(cfg["poll_interval_seconds"])
 
 
