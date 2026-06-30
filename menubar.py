@@ -47,8 +47,7 @@ class HolotekApp(rumps.App):
         self._latest_zone = None
         self._latest_time = None
         self._pending_notify = None
-        self._icons = _make_icons()
-        self._icon_nsimage = self._icons["green"]
+        self._icons = None
 
         self.info_item = rumps.MenuItem("starting\u2026")
         self.time_item = rumps.MenuItem("")
@@ -60,6 +59,12 @@ class HolotekApp(rumps.App):
         ]
 
         threading.Thread(target=self._poll_loop, daemon=True).start()
+
+    def run(self, **options):
+        AppKit.NSApplication.sharedApplication().setActivationPolicy_(
+            AppKit.NSApplicationActivationPolicyAccessory
+        )
+        super().run(**options)
 
     def _reconnect(self):
         from co2meter import CO2monitor
@@ -105,9 +110,11 @@ class HolotekApp(rumps.App):
 
     @rumps.timer(1)
     def _update_ui(self, _sender):
-        z = self._latest_zone
-        if z and z in self._icons and hasattr(self, '_nsapp'):
-            self._nsapp.nsstatusitem.setImage_(self._icons[z])
+        if self._icons is None:
+            self._icons = _make_icons()
+        if hasattr(self, '_nsapp'):
+            z = self._latest_zone or "green"
+            self._nsapp.nsstatusitem.setImage_(self._icons.get(z, self._icons["green"]))
         if self._latest_ppm is not None:
             zname = self._latest_zone or ""
             self.info_item.title = f"CO\u2082: {self._latest_ppm} ppm ({zname})"
