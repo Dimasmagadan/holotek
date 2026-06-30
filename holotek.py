@@ -26,15 +26,37 @@ def main():
 
     logging.basicConfig(level=logging.INFO)
 
+    _LOCK_PATH = "/tmp/holotek.lock"
     try:
-        fd = os.open("/tmp/holotek.lock", os.O_CREAT | os.O_WRONLY | os.O_NOFOLLOW)
+        fd = os.open(_LOCK_PATH, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW)
     except OSError:
         sys.exit("lock path is inaccessible")
-    lock = open(fd, "w")
+    lock = open(fd, "r+")
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
-        sys.exit("holotek already running")
+        try:
+            pid = int(lock.read().strip())
+        except ValueError:
+            pid = None
+        alive = False
+        if pid:
+            try:
+                os.kill(pid, 0)
+                alive = True
+            except ProcessLookupError:
+                pass
+        if not alive:
+            # stale lock from dead process — steal it
+            lock.seek(0)
+            lock.truncate()
+            fcntl.flock(lock, fcntl.LOCK_EX)
+        else:
+            sys.exit("holotek already running")
+    lock.seek(0)
+    lock.truncate()
+    lock.write(str(os.getpid()))
+    lock.flush()
 
     if args.menubar:
         signal.signal(signal.SIGHUP, signal.SIG_IGN)
