@@ -95,15 +95,27 @@ def decide(state, ppm, now, cfg):
 
 
 def read_ppm(mon, retries=3):
-    """Read one CO2 value; retry on None up to `retries` times."""
+    """Read one CO2 value via direct HID (bypass co2meter's magic-table send)."""
+    import hid
     for _ in range(retries):
         try:
-            _, ppm, _ = mon.read_data_raw()
-        except OSError:
+            h = hid.device()
+            h.open_path(mon._info["path"])
+        except Exception:
             return None
-        if ppm is not None:
-            return ppm
-        time.sleep(1)
+        try:
+            for _ in range(20):
+                raw = h.read(8, timeout_ms=2000)
+                if not raw:
+                    break
+                op, val_hi, val_lo, chk, end = raw[0], raw[1], raw[2], raw[3], raw[4]
+                if op != 0x50 or end != 0x0D or raw[5] != 0 or raw[6] != 0 or raw[7] != 0:
+                    continue
+                if (op + val_hi + val_lo) & 0xFF != chk:
+                    continue
+                return (val_hi << 8) | val_lo
+        finally:
+            h.close()
     return None
 
 

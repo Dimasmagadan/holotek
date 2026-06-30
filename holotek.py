@@ -8,7 +8,7 @@ import time
 
 import co2meter
 
-from core import load_config, decide, read_ppm, send_notification
+from core import load_config, zone, decide, read_ppm, send_notification
 
 log = logging.getLogger("holotek")
 
@@ -84,10 +84,12 @@ def main():
 
         ppm = read_ppm(mon)
         if ppm is None:
+            log.warning("no CO2 reading this tick")
             time.sleep(cfg["poll_interval_seconds"])
             continue
 
         out = decide(state, ppm, time.time(), cfg)
+        log.info("CO2=%s ppm zone=%s notify=%s", ppm, zone(ppm, cfg["thresholds"]), bool(out))
         if out:
             send_notification(out[0], out[1])
         time.sleep(cfg["poll_interval_seconds"])
