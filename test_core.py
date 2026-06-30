@@ -122,6 +122,24 @@ class TestDecide:
         assert out[0] == "CO2 back to normal"
         assert s["last_zone"] == "green"
 
+    def test_suppressed_green_then_refires_after_cooldown(self):
+        s = mkstate(last_zone="yellow", last_notified_ppm=900, last_notified_at=0)
+        now = 0
+        # Tick 1: small-drop green re-entry suppressed (within cooldown)
+        out = decide(s, 750, now, DEFAULTS)
+        assert out is None
+        assert s["last_zone"] == "yellow"
+        # Tick 2: still within cooldown, still suppressed
+        out = decide(s, 750, now + 100, DEFAULTS)
+        assert out is None
+        assert s["last_zone"] == "yellow"
+        # Tick 3: past cooldown, fires "back to normal"
+        out = decide(s, 750, COOLDOWN_PAST, DEFAULTS)
+        assert out is not None
+        assert out[0] == "CO2 back to normal"
+        assert s["last_zone"] == "green"
+        assert s["last_notified_ppm"] == 750
+
     def test_green_to_green_nothing(self):
         s = mkstate(last_zone="green", last_notified_ppm=500, last_notified_at=0)
         out = decide(s, 600, 1, DEFAULTS)
@@ -203,5 +221,29 @@ class TestValidate:
     def test_bypass_decrypt_must_be_bool(self):
         v = dict(DEFAULTS)
         v["bypass_decrypt"] = "yes"
+        with pytest.raises(ValueError):
+            validate(v)
+
+    def test_poll_interval_zero_rejected(self):
+        v = dict(DEFAULTS)
+        v["poll_interval_seconds"] = 0
+        with pytest.raises(ValueError):
+            validate(v)
+
+    def test_poll_interval_negative_rejected(self):
+        v = dict(DEFAULTS)
+        v["poll_interval_seconds"] = -10
+        with pytest.raises(ValueError):
+            validate(v)
+
+    def test_notification_cooldown_negative_rejected(self):
+        v = dict(DEFAULTS)
+        v["notification_cooldown_seconds"] = -1
+        with pytest.raises(ValueError):
+            validate(v)
+
+    def test_green_reentry_drop_negative_rejected(self):
+        v = dict(DEFAULTS)
+        v["green_reentry_drop_ppm"] = -1
         with pytest.raises(ValueError):
             validate(v)

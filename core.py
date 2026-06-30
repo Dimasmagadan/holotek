@@ -51,6 +51,7 @@ MESSAGES = {
 
 
 def decide(state, ppm, now, cfg):
+    """Return (title, body) to fire, or None to suppress. Updates state in place."""
     z = zone(ppm, cfg["thresholds"])
     cooldown = cfg["notification_cooldown_seconds"]
     drop = cfg["green_reentry_drop_ppm"]
@@ -94,6 +95,7 @@ def decide(state, ppm, now, cfg):
 
 
 def read_ppm(mon, retries=3):
+    """Read one CO2 value; retry on None (no CO2 packet in max_requests)."""
     for _ in range(retries):
         try:
             _, ppm, _ = mon.read_data_raw()
@@ -106,6 +108,7 @@ def read_ppm(mon, retries=3):
 
 
 def send_notification(title, body):
+    """Fire a macOS notification via osascript. Fixed 2-arg signature."""
     esc = lambda s: str(s).replace("\\", "\\\\").replace('"', '\\"')
     script = f'display notification "{esc(body)}" with title "{esc(title)}"'
     subprocess.run(["osascript", "-e", script], check=False)
