@@ -17,18 +17,18 @@ core; `config.json` is hot-reloaded every poll. Menu-bar mode is deferred.
 
 ## Non-obvious facts an agent will get wrong
 
-- **Device**: Holtek/zyTemp, USB `04d9:a052`, streams 8-byte XOR-encrypted HID
-  packets. Opcodes: `0x50`=CO2, `0x42`=temp, `0x41`=humidity.
-- **`hidapi` does NOT decrypt.** Decryption lives in `co2meter`
-  (`CO2monitor._decrypt`). Don't reimplement XOR unless vendoring the raw-hidapi
-  fallback (only if `co2meter` breaks on ARM64).
+- **Device rev 2.00 = NO encryption.** There are two hardware revisions:
+  old (serial 1.40, bcdDevice 0x0100) sends XOR-encrypted packets; new
+  (serial 2.00, bcdDevice 0x0200 — this one) sends **plaintext**. `dmage/co2mon`
+  auto-detects: `release_number > 0x0100 → decode_data = 0`.
+  Our `read_ppm()` in `core.py` reads raw HID directly and validates plaintext
+  (opcode 0x50, checksum, end marker 0x0D). Do NOT use `co2meter.read_data_raw()`
+  — it sends a feature report that disrupts streaming on rev 2.00.
 - **macOS raw HID ≠ "Input Monitoring".** Input Monitoring is for keystroke
   capture and is irrelevant here. First run may need `sudo`; otherwise rely on
   the brew `libusb`/`hidapi` user-space libs.
 - **`hid` vs `hidapi` PyPI trap.** If import throws a `windll` AttributeError,
   `pip uninstall hid` (wrong package), then `pip install hidapi`.
-- **Unencrypted device variants exist.** If `read_data()` hangs, retry with
-  `CO2monitor(bypass_decrypt=True)` and set `config.bypass_decrypt: true`.
 
 ## Prerequisites (macOS — run before anything works)
 
@@ -53,7 +53,40 @@ sudo python3 -c "import co2meter; m=co2meter.CO2monitor(); print(m.read_data())"
 - Menu-bar path, if ever built, must NOT reuse the `while True` loop — `rumps`
   owns the mainloop. Share `load_config`/`zone` between both entry points.
 
+## zyTemp HID protocol (rev 2.00)
+
+Device streams 8-byte plaintext packets on interrupt endpoint. Each packet:
+
+```
+[opcode] [value_hi] [value_lo] [checksum] [0x0D] [0x00] [0x00] [0x00]
+checksum = (opcode + value_hi + value_lo) & 0xFF
+```
+
+Opcodes (all validated in practice on our unit, serial 2.00):
+
+| Opcode | Name | Decode | Behavior |
+|--------|------|--------|----------|
+| `0x50` | **CO2** | `(hi<<8)\|lo` ppm | Direct CO₂ concentration |
+| `0x42` | **Temp** | `val*0.0625-273.15` °C | Ambient temperature |
+| `0x41` | Humidity | `val/100` % | Always 0 (unpopulated sensor) |
+| `0x71` | Raw CO2? | raw | 95-97% of CO₂ value — maybe unfiltered/uncorrected |
+| `0x43` | Raw temp? | unknown | Tracks `0x42` (ratio ~0.77) — maybe NTC ADC |
+| `0x4F` | Unknown | — | Changes with environment |
+| `0x6D` | Unknown | — | Rock-stable at 2794 — calibration constant |
+| `0x6E` | Unknown | — | Changed when CO₂ dropped — ABC-related? |
+| `0x52` | Unknown | — | Near-constant (~10310) — factory cal? |
+| `0x56` | Unknown | — | Drifts slightly |
+| `0x57` | Unknown | — | Drifts slightly |
+
+Protocol confirmed by Henryk Plötz (Hackaday 2015), dmage/co2mon C library,
+nikvoronin/Co2.Monitor (C#). Upstream RE sources:
+- https://github.com/dmage/co2mon (C, libco2mon)
+- https://github.com/nikvoronin/Co2.Monitor (C#)
+- https://hackaday.io/project/5301-reverse-engineering-a-low-cost-usb-co-monitor
+
 ## Source of truth for the device API
 
 Upstream `vfilimonov/co2meter` — https://github.com/vfilimonov/co2meter.
 If prose docs and the library disagree, trust the library.
+**However:** for rev 2.00 devices, bypass `co2meter.read_data_raw()` entirely
+(see `core.py:read_ppm()`).
