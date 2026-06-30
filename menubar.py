@@ -2,9 +2,10 @@ import logging
 import threading
 import time
 
+import AppKit
 import rumps
 
-from core import load_config, zone, decide, read_ppm, marker_for
+from core import load_config, zone, decide, read_ppm
 
 log = logging.getLogger("holotek.menubar")
 
@@ -14,9 +15,30 @@ def _backoff_sleep(attempt, cap=60, base=10):
     time.sleep(delay)
 
 
+def _make_icons():
+    size = 18.0
+    inset = 3.0
+
+    def _circle(color, template):
+        image = AppKit.NSImage.alloc().initWithSize_((size, size))
+        image.lockFocus()
+        color.setFill()
+        rect = AppKit.NSMakeRect(inset, inset, size - 2 * inset, size - 2 * inset)
+        AppKit.NSBezierPath.bezierPathWithOvalInRect_(rect).fill()
+        image.unlockFocus()
+        image.setTemplate_(template)
+        return image
+
+    return {
+        "green": _circle(AppKit.NSColor.blackColor(), True),
+        "yellow": _circle(AppKit.NSColor.systemYellowColor(), False),
+        "red": _circle(AppKit.NSColor.systemRedColor(), False),
+    }
+
+
 class HolotekApp(rumps.App):
     def __init__(self, config_path="config.json"):
-        super().__init__("\u25CF", quit_button=None)
+        super().__init__("", quit_button=None)
         self.config_path = config_path
         self.cfg = load_config(self.config_path)
         self.mon = None
@@ -25,6 +47,8 @@ class HolotekApp(rumps.App):
         self._latest_zone = None
         self._latest_time = None
         self._pending_notify = None
+        self._icons = _make_icons()
+        self._icon_nsimage = self._icons["green"]
 
         self.info_item = rumps.MenuItem("starting\u2026")
         self.time_item = rumps.MenuItem("")
@@ -81,11 +105,12 @@ class HolotekApp(rumps.App):
 
     @rumps.timer(1)
     def _update_ui(self, _sender):
-        if self._latest_zone:
-            self.title = marker_for(self._latest_zone)
+        z = self._latest_zone
+        if z and z in self._icons and hasattr(self, '_nsapp'):
+            self._nsapp.nsstatusitem.setImage_(self._icons[z])
         if self._latest_ppm is not None:
-            z = self._latest_zone or ""
-            self.info_item.title = f"CO\u2082: {self._latest_ppm} ppm ({z})"
+            zname = self._latest_zone or ""
+            self.info_item.title = f"CO\u2082: {self._latest_ppm} ppm ({zname})"
             self.time_item.title = f"as of {self._latest_time}"
         if self._pending_notify:
             title, body = self._pending_notify
