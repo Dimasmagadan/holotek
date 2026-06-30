@@ -24,6 +24,7 @@ class HolotekApp(rumps.App):
         self._latest_ppm = None
         self._latest_zone = None
         self._latest_time = None
+        self._pending_notify = None
 
         self.info_item = rumps.MenuItem("starting\u2026")
         self.time_item = rumps.MenuItem("")
@@ -34,20 +35,7 @@ class HolotekApp(rumps.App):
             rumps.MenuItem("Quit", callback=rumps.quit_application),
         ]
 
-        self._init_device()
         threading.Thread(target=self._poll_loop, daemon=True).start()
-
-    def _init_device(self):
-        from co2meter import CO2monitor
-        attempt = 0
-        while True:
-            try:
-                self.mon = CO2monitor(bypass_decrypt=self.cfg.get("bypass_decrypt", False))
-                return
-            except Exception as e:
-                log.error("device init failed: %s", e)
-                _backoff_sleep(attempt)
-                attempt += 1
 
     def _reconnect(self):
         from co2meter import CO2monitor
@@ -87,12 +75,7 @@ class HolotekApp(rumps.App):
                 out = decide(self.state, ppm, now, self.cfg)
                 log.info("CO2=%s ppm zone=%s notify=%s", ppm, z, bool(out))
                 if out:
-                    rumps.notification(
-                        title=out[0],
-                        subtitle=out[1],
-                        message="",
-                        sound=True,
-                    )
+                    self._pending_notify = out
 
             time.sleep(self.cfg.get("poll_interval_seconds", 120))
 
@@ -104,3 +87,7 @@ class HolotekApp(rumps.App):
             z = self._latest_zone or ""
             self.info_item.title = f"CO\u2082: {self._latest_ppm} ppm ({z})"
             self.time_item.title = f"as of {self._latest_time}"
+        if self._pending_notify:
+            title, body = self._pending_notify
+            self._pending_notify = None
+            rumps.notification(title=title, subtitle=body, message="", sound=True)

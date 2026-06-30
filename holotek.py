@@ -24,11 +24,6 @@ def main():
     args = ap.parse_args()
     config_path = args.config
 
-    if args.menubar:
-        from menubar import HolotekApp
-        HolotekApp(config_path=config_path).run()
-        return
-
     logging.basicConfig(level=logging.INFO)
 
     try:
@@ -40,6 +35,11 @@ def main():
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
         sys.exit("holotek already running")
+
+    if args.menubar:
+        from menubar import HolotekApp
+        HolotekApp(config_path=config_path).run()
+        return
 
     cfg = load_config(config_path)
 
