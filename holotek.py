@@ -1,6 +1,7 @@
 import argparse
 import fcntl
 import logging
+import os
 import signal
 import sys
 import time
@@ -20,14 +21,29 @@ def main():
 
     logging.basicConfig(level=logging.INFO)
 
-    lock = open("/tmp/holotek.lock", "w")
+    try:
+        fd = os.open("/tmp/holotek.lock", os.O_CREAT | os.O_WRONLY | os.O_NOFOLLOW)
+    except OSError:
+        sys.exit("lock path is inaccessible")
+    lock = open(fd, "w")
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
         sys.exit("holotek already running")
 
     cfg = load_config(config_path)
-    mon = co2meter.CO2monitor(bypass_decrypt=cfg.get("bypass_decrypt", False))
+
+    def init_monitor():
+        while True:
+            try:
+                return co2meter.CO2monitor(
+                    bypass_decrypt=cfg.get("bypass_decrypt", False)
+                )
+            except Exception as e:
+                log.error("device init failed: %s", e)
+                time.sleep(10)
+
+    mon = init_monitor()
     state = {"last_zone": None, "last_notified_at": None, "last_notified_ppm": None}
 
     def on_sigint(*_):
