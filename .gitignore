@@ -1,0 +1,9 @@
+# Tool scratch space
+.mimocode/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
