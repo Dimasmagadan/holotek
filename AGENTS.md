@@ -1,8 +1,7 @@
 # AGENTS.md
 
-## Status: greenfield
+## Status: active development
 
-No commits, no source yet. This repo is a planned-but-unbuilt Python CLI daemon.
 Authoritative design: `.mimocode/plans/holotek-sdd-v4.md` (SDD v4).
 **Do NOT trust `…7673-holotek-sdd.md` (v3)** or `…722-playful-mountain.md` (v1):
 v3's core loop had four bugs (unsatisfiable `co2meter>=1.0.0` pin, pandas-

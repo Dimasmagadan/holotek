@@ -19,8 +19,8 @@ def validate(cfg):
         v = t[key]
         if not isinstance(v, int) or v < 0:
             raise ValueError(f"{key} must be a non-negative int")
-    if t["green_max"] >= t["yellow_max"]:
-        raise ValueError("green_max must be < yellow_max")
+    if t["green_max"] > t["yellow_max"]:
+        raise ValueError("green_max must be <= yellow_max")
     if cfg["poll_interval_seconds"] <= 0:
         raise ValueError("poll_interval_seconds must be > 0")
     if cfg["notification_cooldown_seconds"] < 0:
@@ -81,8 +81,7 @@ def decide(state, ppm, now, cfg):
             fire = True
 
     if not fire:
-        if not (curr_zone == "green" and prev_zone in ("yellow", "red")):
-            state["last_zone"] = z
+        state["last_zone"] = z
         return None
 
     title = MESSAGES.get((prev_zone, z), f"CO2 {z.upper()}")
@@ -97,7 +96,7 @@ def read_ppm(mon, retries=3):
     for _ in range(retries):
         try:
             _, ppm, _ = mon.read_data_raw()
-        except Exception:
+        except OSError:
             return None
         if ppm is not None:
             return ppm

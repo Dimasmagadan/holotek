@@ -13,6 +13,10 @@ from core import load_config, decide, read_ppm, send_notification
 log = logging.getLogger("holotek")
 
 
+def _backoff_sleep(attempt, cap=60, base=10):
+    delay = min(base * (2 ** attempt), cap)
+    time.sleep(delay)
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default="config.json")
@@ -34,6 +38,7 @@ def main():
     cfg = load_config(config_path)
 
     def init_monitor():
+        attempt = 0
         while True:
             try:
                 return co2meter.CO2monitor(
@@ -41,7 +46,8 @@ def main():
                 )
             except Exception as e:
                 log.error("device init failed: %s", e)
-                time.sleep(10)
+                _backoff_sleep(attempt)
+                attempt += 1
 
     mon = init_monitor()
     state = {"last_zone": None, "last_notified_at": None, "last_notified_ppm": None}
@@ -60,13 +66,20 @@ def main():
 
         if not mon.is_alive:
             log.warning("device gone; reconnecting")
-            try:
-                mon = co2meter.CO2monitor(
-                    bypass_decrypt=cfg.get("bypass_decrypt", False)
-                )
-            except Exception as e:
-                log.error("reconnect failed: %s", e)
-                time.sleep(10)
+            attempt = 0
+            while attempt < 10:
+                try:
+                    mon = co2meter.CO2monitor(
+                        bypass_decrypt=cfg.get("bypass_decrypt", False)
+                    )
+                    break
+                except Exception as e:
+                    log.error("reconnect failed: %s", e)
+                    _backoff_sleep(attempt)
+                    attempt += 1
+            else:
+                log.error("reconnect exhausted; waiting for next poll cycle")
+                time.sleep(cfg["poll_interval_seconds"])
                 continue
 
         ppm = read_ppm(mon)
