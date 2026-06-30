@@ -41,10 +41,13 @@ python3 -c "import co2meter; m=co2meter.CO2monitor(); print(m.read_data_raw())"
 ```bash
 python3 holotek.py [--config path/to/config.json]
 python3 holotek.py --menubar [--config path/to/config.json]
+open Holotek.app  # меню-бар, независим от терминала
 ```
 
 - **Фоновый режим** (`holotek.py`): работает в терминале, отправляет `osascript`-уведомления, Ctrl+C для выхода.
-- **Меню-бар** (`holotek.py --menubar`): фоновое rumps-приложение, показывает зону CO₂ (`⚪`/`🟡`/`🔴`) в строке меню, отправляет нативные уведомления macOS со звуком. Выход из выпадающего меню.
+- **Меню-бар** (`holotek.py --menubar`): фоновое rumps-приложение, показывает кружок-индикатор CO₂ в строке меню (`●` — норма, `●` жёлтый — повышение, `●` красный — опасно), отправляет нативные уведомления macOS со звуком. Выход из выпадающего меню.
+- **`.app` bundle** (`open Holotek.app`): то же, что `--menubar`, но полностью отвязан от терминала — закрытие окна терминала не убивает процесс. Можно добавить в Login Items (System Settings → General → Login Items).
+  - После `git clone` нужно один раз подписать бандл: `codesign --force --sign - Holotek.app`
 - Одиночный экземпляр контролируется lock-файлом (оба режима).
 
 ## Конфигурация
@@ -87,6 +90,7 @@ holotek/
 ├── config.json      # пороги и тайминги (горячая перезагрузка)
 ├── test_core.py     # модульные тесты
 ├── requirements.txt # зависимости
+├── Holotek.app/     # macOS bundle для запуска без терминала
 └── docs/            # лендинг GitHub Pages
 ```
 

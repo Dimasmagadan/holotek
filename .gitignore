@@ -9,3 +9,6 @@ __pycache__/
 venv/
 .pytest_cache/
 .DS_Store
+
+# .app ad-hoc code signature (machine-specific, rebuilt locally)
+Holotek.app/Contents/_CodeSignature/
