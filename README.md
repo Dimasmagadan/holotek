@@ -1,77 +1,96 @@
-# holotek — CO₂ Monitor Notification Daemon
+# holotek — CO₂ Monitor Notification Daemon / Мониторинг CO₂ с уведомлениями
 
-Python CLI daemon that reads CO₂ ppm from a USB zyTemp (Holtek) HID device and fires macOS notifications on zone transitions.
+**EN:** Python CLI daemon that reads CO₂ ppm from a USB zyTemp (Holtek) HID device on macOS and fires native notifications on zone transitions. [🌐 Landing page](https://dimasmagadan.github.io/holotek/) · [📦 Device on Ozon](https://www.ozon.ru/product/detektor-uglekislogo-gaza-dadzhet-izmeritel-co2-datchik-co2-analizator-vozduha-227430204/)
 
-## Prerequisites (macOS)
+---
+
+Python-демон для macOS, который читает концентрацию CO₂ с USB-датчика zyTemp (Holtek) и отправляет системные уведомления при переходе между зонами (норма → повышение → опасно).
+
+🌐 [Лендинг](https://dimasmagadan.github.io/holotek/) · 🛒 [Датчик на Ozon](https://www.ozon.ru/product/detektor-uglekislogo-gaza-dadzhet-izmeritel-co2-datchik-co2-analizator-vozduha-227430204/) · 💻 [Репозиторий](https://github.com/Dimasmagadan/holotek)
+
+## История
+
+Искал датчик CO₂. Сначала хотел найти что-то с Wi-Fi и оповещениями, но ничего подходящего в адекватном ценовом диапазоне не нашёл. Плюс начитался статей, что в дешёвых Wi-Fi-датчиках ставят плохие сенсоры.
+
+Поэтому выбрал, как мне казалось, «тупой» прибор — только с цветовой индикацией на корпусе и цифрами на экране, но с качественным сенсором. Подключил его к компьютеру через USB и забыл.
+
+Через некоторое время заметил, что в списке доступных устройств OrbStack появилось новое USB-устройство. Полез разбираться — оказалось, датчик не только питание по USB получает, но и данные передаёт.
+
+Дописал эту программу — теперь приходят уведомления.
+
+## Установка (macOS)
 
 ```bash
 brew install libusb hidapi
 pip install -r requirements.txt
 ```
 
-Test the device:
+Проверить, что датчик определяется:
 
 ```bash
 python3 -c "import co2meter; m=co2meter.CO2monitor(); print(m.read_data_raw())"
-# expected: (datetime, co2_int, temp_float)
+# Ожидается: (datetime, co2_int, temp_float)
 ```
 
-If you get a permission error, the macOS HID driver owns the device.
-Run the same command with `sudo` once, then unplug/replug the device.
-After that, user-space access works without `sudo`.
+Если ошибка доступа — macOS HID-драйвер занял устройство. Запустите ту же команду с `sudo` один раз, затем отключите и снова подключите датчик. После этого доступ из пользовательского пространства работает без `sudo`.
 
-If it hangs, set `"bypass_decrypt": true` in `config.json`.
+Если зависает — установите `"bypass_decrypt": true` в `config.json`.
 
-## Usage
+## Использование
 
 ```bash
 python3 holotek.py [--config path/to/config.json]
 python3 holotek.py --menubar [--config path/to/config.json]
 ```
 
-- **headless daemon** (`holotek.py`): runs in terminal, fires `osascript` notifications, Ctrl+C to exit.
-- **menu-bar app** (`holotek.py --menubar`): background rumps app, shows CO₂ zone marker (`⚪`/`🟡`/`🔴`) in menu bar, fires native macOS notifications with sound. Quit from the dropdown menu.
-- Single-instance enforced by lockfile (both modes).
+- **Фоновый режим** (`holotek.py`): работает в терминале, отправляет `osascript`-уведомления, Ctrl+C для выхода.
+- **Меню-бар** (`holotek.py --menubar`): фоновое rumps-приложение, показывает зону CO₂ (`⚪`/`🟡`/`🔴`) в строке меню, отправляет нативные уведомления macOS со звуком. Выход из выпадающего меню.
+- Одиночный экземпляр контролируется lock-файлом (оба режима).
 
-## Configuration
+## Конфигурация
 
-| Key | Default | Range | Meaning |
+| Ключ | По умолчанию | Диапазон | Описание |
 |---|---|---|---|
-| `thresholds.green_max` | 800 | integer ≥ 0 | upper bound for green zone (ppm) |
-| `thresholds.yellow_max` | 1200 | integer ≥ green_max | upper bound for yellow zone (ppm) |
-| `poll_interval_seconds` | 120 | > 0 | seconds between sensor reads |
-| `notification_cooldown_seconds` | 1800 | ≥ 0 | min seconds between repeat alert notifications |
-| `green_reentry_drop_ppm` | 200 | ≥ 0 | ppm drop that triggers immediate "back to normal" inside cooldown |
-| `bypass_decrypt` | false | boolean | skip XOR decryption for unencrypted device variants |
+| `thresholds.green_max` | 800 | целое ≥ 0 | верхняя граница зелёной зоны (ppm) |
+| `thresholds.yellow_max` | 1200 | целое ≥ green_max | верхняя граница жёлтой зоны (ppm) |
+| `poll_interval_seconds` | 120 | > 0 | секунд между опросами датчика |
+| `notification_cooldown_seconds` | 1800 | ≥ 0 | секунд между повторными уведомлениями в одной зоне |
+| `green_reentry_drop_ppm` | 200 | ≥ 0 | падение ppm, при котором «возврат в норму» срабатывает мгновенно даже внутри задержки |
+| `bypass_decrypt` | false | boolean | отключить XOR-дешифровку для устройств без шифрования |
 
-## Zone semantics
+Конфиг горячо перезагружается при каждом опросе — можно менять на лету.
 
-- **green**:  `ppm ≤ green_max`
-- **yellow**: `green_max < ppm ≤ yellow_max`
-- **red**:    `ppm > yellow_max`
+## Зоны CO₂
 
-## Notification policy
+| Зона | Условие |
+|---|---|
+| 🟢 Зелёная | `ppm ≤ green_max` |
+| 🟡 Жёлтая | `green_max < ppm ≤ yellow_max` |
+| 🔴 Красная | `ppm > yellow_max` |
 
-- First sample after start produces no notification.
-- Escalation (green→yellow, green→red, yellow→red) fires immediately.
-- Same-zone repeat yellow/red suppressed within cooldown, refires after.
-- Improving within alert (red→yellow) is rate-limited and preserves the baseline reading.
-- Recovery to green with a drop ≥ `green_reentry_drop_ppm` bypasses cooldown.
-- Recovery to green with a small drop respects cooldown.
+## Политика уведомлений
 
-## Project structure
+- Первый замер после запуска не отправляет уведомление.
+- Эскалация (зелёный→жёлтый, зелёный→красный, жёлтый→красный) срабатывает сразу.
+- Повторное уведомление в той же зоне (жёлтой/красной) подавляется в течение задержки, срабатывает снова после.
+- Улучшение в пределах тревоги (красный→жёлтый) ограничено по частоте и сохраняет исходное показание.
+- Возврат в зелёную зону с падением ≥ `green_reentry_drop_ppm` не учитывает задержку.
+- Возврат в зелёную зону с малым падением учитывает задержку.
+
+## Структура проекта
 
 ```
 holotek/
-├── holotek.py       # daemon loop (argparse, signal, lockfile, poll)
-├── menubar.py       # rumps menu-bar app (HolotekApp)
-├── core.py          # shared logic (decide, zone, config, notification)
-├── config.json      # thresholds and timing (hot-reloaded)
-├── test_core.py     # unit tests
-└── requirements.txt # dependencies
+├── holotek.py       # основной цикл демона (argparse, сигналы, lockfile, опрос)
+├── menubar.py       # rumps-приложение для строки меню (HolotekApp)
+├── core.py          # общая логика (зоны, конфиг, уведомления)
+├── config.json      # пороги и тайминги (горячая перезагрузка)
+├── test_core.py     # модульные тесты
+├── requirements.txt # зависимости
+└── docs/            # лендинг GitHub Pages
 ```
 
-## Tests
+## Тесты
 
 ```bash
 pip install pytest

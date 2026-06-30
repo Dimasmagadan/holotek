@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>holotek — мониторинг CO₂ с уведомлениями на macOS</title>
+<meta name="description" content="holotek — программа для macOS, которая читает CO₂ с USB-датчика zyTemp (Holtek) и отправляет уведомления при изменении уровня CO₂.">
+<meta name="theme-color" content="#0a0b0e">
+<link rel="canonical" href="https://dimasmagadan.github.io/holotek/">
+<style>
+:root {
+  --bg: #0a0b0e;
+  --bg-alt: #0f1117;
+  --surface: #14151a;
+  --surface-hover: #1c1d26;
+  --border: #25262e;
+  --text: #e4e4e7;
+  --text-muted: #8b8b95;
+  --text-dim: #5c5c66;
+  --accent: #22d3ee;
+  --accent-hover: #67e8f9;
+  --green: #4ade80;
+  --green-bg: rgba(74, 222, 128, 0.08);
+  --yellow: #fbbf24;
+  --yellow-bg: rgba(251, 191, 36, 0.08);
+  --red: #f87171;
+  --red-bg: rgba(248, 113, 113, 0.08);
+  --radius: 12px;
+  --radius-sm: 8px;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "SF Mono", "Fira Code", "Fira Mono", "Roboto Mono", monospace;
+}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; }
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+a { color: var(--accent); text-decoration: none; transition: color .15s; }
+a:hover { color: var(--accent-hover); text-decoration: underline; }
+img { max-width: 100%; height: auto; display: block; border-radius: var(--radius); }
+code {
+  font-family: var(--font-mono);
+  font-size: .875em;
+  background: var(--surface);
+  padding: .15em .4em;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+}
+pre {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 1rem;
+  overflow-x: auto;
+  font-size: .875rem;
+  line-height: 1.5;
+}
+pre code { background: none; border: none; padding: 0; font-size: inherit; }
+h1, h2, h3 { line-height: 1.3; font-weight: 600; }
+h2 { font-size: clamp(1.25rem, 2.5vw, 1.5rem); margin-bottom: 1rem; }
+
+.container { max-width: 800px; margin: 0 auto; padding: 0 1.5rem; }
+
+nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.5rem;
+  max-width: 800px;
+  margin: 0 auto;
+}
+.logo {
+  font-weight: 700;
+  font-size: 1.125rem;
+  color: var(--text);
+  letter-spacing: -.02em;
+}
+.logo span { color: var(--accent); }
+.nav-links { display: flex; gap: 1.25rem; align-items: center; }
+.nav-links a {
+  font-size: .875rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: .35em;
+}
+.nav-links a:hover { color: var(--text); text-decoration: none; }
+.nav-links svg { width: 16px; height: 16px; flex-shrink: 0; }
+
+.hero {
+  text-align: center;
+  padding: 3rem 1.5rem 2rem;
+}
+.hero h1 {
+  font-size: clamp(2rem, 5vw, 3rem);
+  font-weight: 700;
+  letter-spacing: -.03em;
+  margin-bottom: .5rem;
+  background: linear-gradient(135deg, var(--accent), #a78bfa);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.hero .tagline {
+  font-size: clamp(1rem, 2vw, 1.25rem);
+  color: var(--text-muted);
+  margin-bottom: 1.5rem;
+}
+.hero .subtitle {
+  font-size: .9375rem;
+  color: var(--text-dim);
+  max-width: 520px;
+  margin: 0 auto 2rem;
+}
+.hero-actions { display: flex; gap: .75rem; justify-content: center; flex-wrap: wrap; }
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: .4em;
+  padding: .6rem 1.25rem;
+  border-radius: 9999px;
+  font-size: .875rem;
+  font-weight: 500;
+  transition: all .15s;
+  text-decoration: none;
+}
+.btn-primary {
+  background: var(--accent);
+  color: #000 !important;
+  border: none;
+}
+.btn-primary:hover { background: var(--accent-hover); text-decoration: none; }
+.btn-secondary {
+  background: var(--surface);
+  color: var(--text) !important;
+  border: 1px solid var(--border);
+}
+.btn-secondary:hover { background: var(--surface-hover); text-decoration: none; }
+
+section { padding: 2.5rem 0; }
+
+.photo-section { background: var(--bg-alt); }
+.photo-section figure {
+  max-width: 500px;
+  margin: 0 auto;
+  text-align: center;
+}
+.photo-section figcaption {
+  font-size: .8125rem;
+  color: var(--text-dim);
+  margin-top: .75rem;
+  line-height: 1.5;
+}
+
+.story p {
+  font-size: .9375rem;
+  color: var(--text-muted);
+  margin-bottom: 1rem;
+  max-width: 640px;
+}
+.story p:last-child { margin-bottom: 0; }
+
+.zones-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem;
+  margin: 1.5rem 0;
+}
+.zone-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.25rem;
+  text-align: center;
+  transition: border-color .15s, transform .15s;
+}
+.zone-card:hover { transform: translateY(-2px); }
+.zone-card.green { border-color: var(--green); }
+.zone-card.yellow { border-color: var(--yellow); }
+.zone-card.red { border-color: var(--red); }
+.zone-card .indicator {
+  font-size: 2rem;
+  line-height: 1;
+  margin-bottom: .5rem;
+}
+.zone-card .label {
+  font-weight: 600;
+  font-size: 1rem;
+  margin-bottom: .25rem;
+}
+.zone-card .range {
+  font-size: .8125rem;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+.zone-card .desc {
+  font-size: .8125rem;
+  color: var(--text-dim);
+  margin-top: .5rem;
+}
+
+#how-it-works p {
+  font-size: .9375rem;
+  color: var(--text-muted);
+  max-width: 640px;
+}
+
+footer {
+  border-top: 1px solid var(--border);
+  padding: 2rem 1.5rem;
+  text-align: center;
+  font-size: .8125rem;
+  color: var(--text-dim);
+}
+footer p { margin-bottom: .35rem; }
+footer p:last-child { margin-bottom: 0; }
+footer a { color: var(--text-muted); }
+footer a:hover { color: var(--text); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
+  html { scroll-behavior: auto; }
+}
+@media (max-width: 600px) {
+  nav { flex-direction: column; gap: .75rem; }
+  .zones-grid { grid-template-columns: 1fr; }
+  .hero { padding: 2rem 1.5rem 1.5rem; }
+}
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="logo">holotek<span>.</span></div>
+  <div class="nav-links">
+    <a href="https://github.com/Dimasmagadan/holotek" target="_blank" rel="noopener">
+      <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+      GitHub
+    </a>
+    <a href="https://www.ozon.ru/product/detektor-uglekislogo-gaza-dadzhet-izmeritel-co2-datchik-co2-analizator-vozduha-227430204/" target="_blank" rel="noopener">
+      <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 0a8 8 0 110 16A8 8 0 018 0zM5.5 4.5a1 1 0 100 2 1 1 0 000-2zm5 0a1 1 0 100 2 1 1 0 000-2zM8 13a4 4 0 003.46-2H4.54A4 4 0 008 13z"/></svg>
+      Датчик на Ozon
+    </a>
+  </div>
+</nav>
+
+<header class="hero">
+  <h1>holotek</h1>
+  <p class="tagline">Мониторинг CO₂ с уведомлениями на macOS</p>
+  <p class="subtitle">Читает показания углекислого газа с USB-датчика zyTemp (Holtek) и отправляет уведомления при изменении уровня CO₂</p>
+  <div class="hero-actions">
+    <a href="https://github.com/Dimasmagadan/holotek" target="_blank" rel="noopener" class="btn btn-primary">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+      Исходный код
+    </a>
+    <a href="https://www.ozon.ru/product/detektor-uglekislogo-gaza-dadzhet-izmeritel-co2-datchik-co2-analizator-vozduha-227430204/" target="_blank" rel="noopener" class="btn btn-secondary">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M4 0a1 1 0 010 2H1.5a.5.5 0 00-.5.5v10a.5.5 0 00.5.5H4a1 1 0 010 2H1.5A2.5 2.5 0 01-1 12.5v-10A2.5 2.5 0 011.5 0H4zm8 0a1 1 0 010 2h2.5a.5.5 0 01.5.5v10a.5.5 0 01-.5.5H12a1 1 0 010 2h2.5a2.5 2.5 0 002.5-2.5v-10A2.5 2.5 0 0014.5 0H12zM5.5 7a.5.5 0 000 1h5a.5.5 0 000-1h-5z"/></svg>
+      Купить датчик
+    </a>
+  </div>
+</header>
+
+<main>
+
+<section class="photo-section">
+  <div class="container">
+    <figure>
+      <img src="assets/7220306590.webp" alt="USB-датчик CO₂ zyTemp (Holtek) — белый корпус, USB-кабель, экран с показателями" width="750" height="1000" loading="lazy" decoding="async">
+      <figcaption>Датчик CO₂ zyTemp (Holtek) — устройство не только показывает цифры на экране, но и передаёт данные по USB</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section id="story" class="story">
+  <div class="container">
+    <h2>История</h2>
+    <p>Искал датчик CO₂. Сначала хотел найти что-то с Wi-Fi и оповещениями, но ничего подходящего в адекватном ценовом диапазоне не нашёл. Плюс начитался статей, что в дешёвых Wi-Fi-датчиках ставят плохие сенсоры.</p>
+    <p>Поэтому выбрал, как мне казалось, «тупой» прибор — только с цветовой индикацией на корпусе и цифрами на экране, но с качественным сенсором. Подключил его к компьютеру через USB и забыл.</p>
+    <p>Через некоторое время заметил, что в списке доступных устройств OrbStack появилось новое USB-устройство. Полез разбираться — оказалось, датчик не только питание по USB получает, но и данные передаёт.</p>
+    <p>Дописал эту программу — теперь приходят уведомления.</p>
+  </div>
+</section>
+
+<section id="zones">
+  <div class="container">
+    <h2>Зоны CO₂</h2>
+    <p style="color:var(--text-muted);font-size:.9375rem;margin-bottom:1.5rem">Программа делит концентрацию CO₂ на три зоны и оповещает при каждом переходе:</p>
+    <div class="zones-grid">
+      <div class="zone-card green">
+        <div class="indicator">🟢</div>
+        <div class="label">Норма</div>
+        <div class="range">≤ 800 ppm</div>
+        <div class="desc">Свежий воздух, всё в порядке</div>
+      </div>
+      <div class="zone-card yellow">
+        <div class="indicator">🟡</div>
+        <div class="label">Повышение</div>
+        <div class="range">800–1200 ppm</div>
+        <div class="desc">Стоит проветрить</div>
+      </div>
+      <div class="zone-card red">
+        <div class="indicator">🔴</div>
+        <div class="label">Опасно</div>
+        <div class="range">&gt; 1200 ppm</div>
+        <div class="desc">Духота, срочно проветрить</div>
+      </div>
+    </div>
+    <p>Границы зон настраиваются в <code>config.json</code> вместе с интервалом опроса и задержками уведомлений.</p>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <p><a href="https://github.com/Dimasmagadan/holotek" target="_blank" rel="noopener">Исходный код на GitHub</a></p>
+  <p><a href="https://www.ozon.ru/product/detektor-uglekislogo-gaza-dadzhet-izmeritel-co2-datchik-co2-analizator-vozduha-227430204/" target="_blank" rel="noopener">Купить датчик на Ozon</a></p>
+  <p style="margin-top:.75rem;color:var(--text-dim)">Сделано <a href="https://github.com/Dimasmagadan" style="color:var(--text-muted)">Dimasmagadan</a></p>
+</footer>
+
+</body>
+</html>
