@@ -253,7 +253,7 @@ class TestValidate:
 
 class TestMarker:
     def test_green(self):
-        assert marker_for("green") == "\u26AA"
+        assert marker_for("green") == "\u25CF"
 
     def test_yellow(self):
         assert marker_for("yellow") == "\U0001F7E1"
@@ -262,4 +262,4 @@ class TestMarker:
         assert marker_for("red") == "\U0001F534"
 
     def test_unknown_fallback(self):
-        assert marker_for("bogus") == "\u26AA"
+        assert marker_for("bogus") == "\u25CF"

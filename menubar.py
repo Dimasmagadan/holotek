@@ -16,7 +16,7 @@ def _backoff_sleep(attempt, cap=60, base=10):
 
 class HolotekApp(rumps.App):
     def __init__(self, config_path="config.json"):
-        super().__init__("\u26AA", quit_button=None)
+        super().__init__("\u25CF", quit_button=None)
         self.config_path = config_path
         self.cfg = load_config(self.config_path)
         self.mon = None

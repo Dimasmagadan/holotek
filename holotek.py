@@ -37,6 +37,7 @@ def main():
         sys.exit("holotek already running")
 
     if args.menubar:
+        signal.signal(signal.SIGHUP, signal.SIG_IGN)
         from menubar import HolotekApp
         HolotekApp(config_path=config_path).run()
         return
