@@ -377,12 +377,24 @@ class TestDetectTrend:
         result = detect_trend(s, 800, t0 + 600.0, TREND_CFG)
         assert result == "rising"
 
-    def test_falling_fires_when_rate_below_negative_threshold(self):
+    def test_falling_returns_none(self):
         s = mktrend()
         t0 = 0.0
         detect_trend(s, 900, t0, TREND_CFG)
         result = detect_trend(s, 800, t0 + 600.0, TREND_CFG)
-        assert result == "falling"
+        assert result is None
+
+    def test_falling_does_not_consume_cooldown(self):
+        s = mktrend()
+        t0 = 0.0
+        detect_trend(s, 900, t0, TREND_CFG)
+        # Fast fall: silent, and must not set trend_last_notified_at
+        result1 = detect_trend(s, 800, t0 + 120.0, TREND_CFG)
+        assert result1 is None
+        assert s.get("trend_last_notified_at") is None
+        # Fast rise shortly after: must still fire (cooldown untouched)
+        result2 = detect_trend(s, 1000, t0 + 240.0, TREND_CFG)
+        assert result2 == "rising"
 
     def test_stable_co2_returns_none(self):
         s = mktrend()

@@ -148,7 +148,13 @@ def send_notification(title, body):
 
 
 def detect_trend(state, ppm, now, cfg):
-    """Return 'rising' | 'falling' | None based on recent ppm history. Updates state."""
+    """Return 'rising' or None based on recent ppm history. Updates state.
+
+    Falling trends are intentionally silent and never touch the cooldown:
+    a fast drop is already covered by the green-reentry notification, and
+    letting it consume the cooldown could suppress a genuine rising alert
+    right after (e.g. window opened then closed).
+    """
     window = cfg.get("trend_window_seconds", 600)
     threshold = cfg.get("trend_alert_ppm_per_min", 5.0)
     cooldown = cfg.get("trend_cooldown_seconds", 1800)
@@ -168,7 +174,7 @@ def detect_trend(state, ppm, now, cfg):
     if elapsed < 1.0:
         return None
     rate = (ppm - p0) / elapsed
-    if abs(rate) >= threshold:
+    if rate >= threshold:
         state["trend_last_notified_at"] = now
-        return "rising" if rate > 0 else "falling"
+        return "rising"
     return None
