@@ -6,6 +6,12 @@ from collections import deque
 CONFIG_PATH = "config.json"
 SEVERITY = {"green": 0, "yellow": 1, "red": 2}
 
+TREND_DEFAULTS = {
+    "trend_window_seconds": 600,
+    "trend_alert_ppm_per_min": 5.0,
+    "trend_cooldown_seconds": 1800,
+}
+
 
 def load_config(path=CONFIG_PATH):
     with open(path) as f:
@@ -31,6 +37,18 @@ def validate(cfg):
     v = cfg.get("bypass_decrypt", False)
     if not isinstance(v, bool):
         raise ValueError("bypass_decrypt must be a boolean")
+    if "trend_window_seconds" in cfg:
+        v = cfg["trend_window_seconds"]
+        if not isinstance(v, int) or isinstance(v, bool) or v < 120:
+            raise ValueError("trend_window_seconds must be an int >= 120")
+    if "trend_alert_ppm_per_min" in cfg:
+        v = cfg["trend_alert_ppm_per_min"]
+        if not isinstance(v, (int, float)) or isinstance(v, bool) or v <= 0:
+            raise ValueError("trend_alert_ppm_per_min must be a positive number")
+    if "trend_cooldown_seconds" in cfg:
+        v = cfg["trend_cooldown_seconds"]
+        if not isinstance(v, int) or isinstance(v, bool) or v < 0:
+            raise ValueError("trend_cooldown_seconds must be an int >= 0")
 
 
 def zone(ppm, t):
@@ -155,9 +173,9 @@ def detect_trend(state, ppm, now, cfg):
     letting it consume the cooldown could suppress a genuine rising alert
     right after (e.g. window opened then closed).
     """
-    window = cfg.get("trend_window_seconds", 600)
-    threshold = cfg.get("trend_alert_ppm_per_min", 5.0)
-    cooldown = cfg.get("trend_cooldown_seconds", 1800)
+    window = cfg.get("trend_window_seconds", TREND_DEFAULTS["trend_window_seconds"])
+    threshold = cfg.get("trend_alert_ppm_per_min", TREND_DEFAULTS["trend_alert_ppm_per_min"])
+    cooldown = cfg.get("trend_cooldown_seconds", TREND_DEFAULTS["trend_cooldown_seconds"])
 
     hist = state.setdefault("trend_history", deque())
     hist.append((now, ppm))

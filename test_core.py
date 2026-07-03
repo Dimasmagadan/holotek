@@ -1,3 +1,4 @@
+import copy
 import time
 import pytest
 from unittest.mock import patch, MagicMock
@@ -20,6 +21,13 @@ def mkstate(**kw):
     s = {"last_zone": None, "last_notified_at": None, "last_notified_ppm": None}
     s.update(kw)
     return s
+
+
+def mkconfig():
+    """Deep copy of DEFAULTS — a shallow dict(DEFAULTS) shares the nested
+    'thresholds' dict, so mutating v['thresholds'][...] would corrupt the
+    shared global for every test that runs afterward."""
+    return copy.deepcopy(DEFAULTS)
 
 
 # ── zone() ──────────────────────────────────────────────────────────────────
@@ -215,57 +223,84 @@ class TestValidate:
         validate(DEFAULTS)
 
     def test_green_max_equal_yellow_max_allowed(self):
-        v = dict(DEFAULTS)
+        v = mkconfig()
         v["thresholds"]["green_max"] = 800
         v["thresholds"]["yellow_max"] = 800
         validate(v)
 
     def test_green_max_greater_than_yellow_max_rejected(self):
-        v = dict(DEFAULTS)
+        v = mkconfig()
         v["thresholds"]["green_max"] = 1000
         v["thresholds"]["yellow_max"] = 800
         with pytest.raises(ValueError):
             validate(v)
 
     def test_negative_thresholds_rejected(self):
-        v = dict(DEFAULTS)
+        v = mkconfig()
         v["thresholds"]["green_max"] = -1
         with pytest.raises(ValueError):
             validate(v)
 
     def test_non_int_thresholds_rejected(self):
-        v = dict(DEFAULTS)
+        v = mkconfig()
         v["thresholds"]["green_max"] = "800"
         with pytest.raises(ValueError):
             validate(v)
 
     def test_bypass_decrypt_must_be_bool(self):
-        v = dict(DEFAULTS)
+        v = mkconfig()
         v["bypass_decrypt"] = "yes"
         with pytest.raises(ValueError):
             validate(v)
 
     def test_poll_interval_zero_rejected(self):
-        v = dict(DEFAULTS)
+        v = mkconfig()
         v["poll_interval_seconds"] = 0
         with pytest.raises(ValueError):
             validate(v)
 
     def test_poll_interval_negative_rejected(self):
-        v = dict(DEFAULTS)
+        v = mkconfig()
         v["poll_interval_seconds"] = -10
         with pytest.raises(ValueError):
             validate(v)
 
     def test_notification_cooldown_negative_rejected(self):
-        v = dict(DEFAULTS)
+        v = mkconfig()
         v["notification_cooldown_seconds"] = -1
         with pytest.raises(ValueError):
             validate(v)
 
     def test_green_reentry_drop_negative_rejected(self):
-        v = dict(DEFAULTS)
+        v = mkconfig()
         v["green_reentry_drop_ppm"] = -1
+        with pytest.raises(ValueError):
+            validate(v)
+
+    def test_trend_keys_absent_is_valid(self):
+        validate(DEFAULTS)  # DEFAULTS has no trend_* keys
+
+    def test_trend_window_below_minimum_rejected(self):
+        v = mkconfig()
+        v["trend_window_seconds"] = 60
+        with pytest.raises(ValueError):
+            validate(v)
+
+    def test_trend_rate_zero_rejected(self):
+        v = mkconfig()
+        v["trend_alert_ppm_per_min"] = 0
+        with pytest.raises(ValueError):
+            validate(v)
+
+    def test_trend_rate_non_numeric_rejected(self):
+        v = mkconfig()
+        v["trend_alert_ppm_per_min"] = "5.0"
+        with pytest.raises(ValueError):
+            validate(v)
+
+    def test_trend_cooldown_negative_rejected(self):
+        v = mkconfig()
+        v["trend_cooldown_seconds"] = -1
         with pytest.raises(ValueError):
             validate(v)
 
