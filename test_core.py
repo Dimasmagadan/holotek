@@ -378,6 +378,16 @@ class TestReadSensors:
         assert ppm is None
         assert temp is None
 
+    def test_open_fails_once_then_succeeds(self):
+        failing = MagicMock()
+        failing.open_path.side_effect = OSError("no device")
+        good_h = MagicMock()
+        good_h.read.side_effect = [_make_packet(0x50, 750), []]
+        dev_cls = MagicMock(side_effect=[failing, good_h])
+        with patch("hid.device", dev_cls):
+            ppm, temp = read_sensors(_make_mon(), retries=2)
+        assert ppm == 750
+
 
 # \u2500\u2500 detect_trend() \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 

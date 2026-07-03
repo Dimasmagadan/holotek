@@ -125,7 +125,7 @@ def read_sensors(mon, retries=3):
             h = hid.device()
             h.open_path(mon._info["path"])
         except Exception:
-            return None, None
+            continue
         try:
             ppm = temp_c = None
             for _ in range(20):
