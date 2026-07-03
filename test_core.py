@@ -422,20 +422,21 @@ class TestDetectTrend:
         result = detect_trend(s, 800, t0 + 600.0, TREND_CFG)
         assert result == "rising"
 
-    def test_falling_returns_none(self):
+    def test_falling_returns_falling(self):
         s = mktrend()
         t0 = 0.0
         detect_trend(s, 900, t0, TREND_CFG)
+        # 10 minutes later, -100 ppm → 10 ppm/min drop > 5.0 threshold
         result = detect_trend(s, 800, t0 + 600.0, TREND_CFG)
-        assert result is None
+        assert result == "falling"
 
     def test_falling_does_not_consume_cooldown(self):
         s = mktrend()
         t0 = 0.0
         detect_trend(s, 900, t0, TREND_CFG)
-        # Fast fall: silent, and must not set trend_last_notified_at
+        # Fast fall: returns "falling" but must not set trend_last_notified_at
         result1 = detect_trend(s, 800, t0 + 120.0, TREND_CFG)
-        assert result1 is None
+        assert result1 == "falling"
         assert s.get("trend_last_notified_at") is None
         # Fast rise shortly after: must still fire (cooldown untouched)
         result2 = detect_trend(s, 1000, t0 + 240.0, TREND_CFG)
@@ -526,6 +527,25 @@ class TestPollStep:
             ("CO2 rising", "900 ppm"),
             ("CO₂ rising fast", "900 ppm"),
         ]
+        assert result.trend == "rising"
+
+    def test_sustained_rise_does_not_spam_notification_within_cooldown(self):
+        # Simulates real poll_step usage: consecutive polls, rate stays above
+        # threshold the whole time. Only the first poll should notify; later
+        # polls must still report trend="rising" for the UI marker without
+        # re-firing the notification until trend_cooldown_seconds elapses.
+        s = mkstate(last_zone="green", last_notified_ppm=500, last_notified_at=0)
+        s["trend_history"] = deque([(0.0, 700)])
+        readings = [760, 820, 880]
+        fired = []
+        for i, ppm in enumerate(readings):
+            now = (i + 1) * 120.0
+            dev_cls = self._mock_hid([_make_packet(0x50, ppm)])
+            with patch("hid.device", dev_cls):
+                result = poll_step(_make_mon(), s, TREND_CFG, now=now)
+            assert result.trend == "rising"
+            fired.append(("CO₂ rising fast", f"{ppm} ppm") in result.notifications)
+        assert fired == [True, False, False]
 
 
 # ── reconnect() ──────────────────────────────────────────────────────────

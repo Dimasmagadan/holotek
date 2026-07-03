@@ -159,12 +159,13 @@ def send_notification(title, body):
 
 
 def detect_trend(state, ppm, now, cfg):
-    """Return 'rising' or None based on recent ppm history. Updates state.
+    """Return 'rising', 'falling', or None based on recent ppm history. Updates state.
 
-    Falling trends are intentionally silent and never touch the cooldown:
-    a fast drop is already covered by the green-reentry notification, and
-    letting it consume the cooldown could suppress a genuine rising alert
-    right after (e.g. window opened then closed).
+    Always returns 'rising'/'falling' for the caller's UI marker, regardless of
+    cooldown. Only updates trend_last_notified_at (and thus whether poll_step
+    treats this as a fresh, notification-worthy rise) when outside the cooldown
+    window. Falling trends never touch the cooldown — a fast drop is already
+    covered by the green-reentry notification.
     """
     window = cfg.get("trend_window_seconds", TREND_DEFAULTS["trend_window_seconds"])
     threshold = cfg.get("trend_alert_ppm_per_min", TREND_DEFAULTS["trend_alert_ppm_per_min"])
@@ -175,9 +176,6 @@ def detect_trend(state, ppm, now, cfg):
     while hist and (now - hist[0][0]) > window:
         hist.popleft()
 
-    last = state.get("trend_last_notified_at")
-    if last is not None and (now - last) < cooldown:
-        return None
     if len(hist) < 2:
         return None
     t0, p0 = hist[0]
@@ -185,9 +183,14 @@ def detect_trend(state, ppm, now, cfg):
     if elapsed < 1.0:
         return None
     rate = (ppm - p0) / elapsed
+
     if rate >= threshold:
-        state["trend_last_notified_at"] = now
+        last = state.get("trend_last_notified_at")
+        if last is None or (now - last) >= cooldown:
+            state["trend_last_notified_at"] = now
         return "rising"
+    if rate <= -threshold:
+        return "falling"
     return None
 
 
@@ -220,6 +223,7 @@ class TickResult(NamedTuple):
     temp_c: Optional[float]
     zone: Optional[str]
     notifications: list
+    trend: Optional[str] = None
 
 
 def poll_step(mon, state, cfg, now=None):
@@ -239,7 +243,8 @@ def poll_step(mon, state, cfg, now=None):
     out = decide(state, ppm, now, cfg)
     if out:
         notifications.append(out)
+    prev_notified_at = state.get("trend_last_notified_at")
     trend = detect_trend(state, ppm, now, cfg)
-    if trend == "rising":
+    if trend == "rising" and state.get("trend_last_notified_at") != prev_notified_at:
         notifications.append(("CO₂ rising fast", f"{ppm} ppm"))
-    return TickResult(ppm, temp_c, z, notifications)
+    return TickResult(ppm, temp_c, z, notifications, trend)

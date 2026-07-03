@@ -14,6 +14,12 @@ MARKERS = {
     "green": "\U0001F7E2",
     "yellow": "\U0001F7E1",
     "red": "\U0001F534",
+    "green_up": "🟢↑",
+    "green_down": "🟢↓",
+    "yellow_up": "🟡↑",
+    "yellow_down": "🟡↓",
+    "red_up": "🔴↑",
+    "red_down": "🔴↓",
 }
 
 
@@ -34,7 +40,7 @@ class HolotekApp:
         self.cfg = load_config(self.config_path)
         self.mon = None
         self.state = {"last_zone": None, "last_notified_at": None, "last_notified_ppm": None}
-        self._latest = None  # (ppm, temp_c, zone, timestamp), set atomically
+        self._latest = None  # (ppm, temp_c, zone, timestamp, trend), set atomically
         self._pending_notify = []
         self._status_item = None
         self._delegate = None
@@ -114,8 +120,8 @@ class HolotekApp:
             if result.ppm is None:
                 log.warning("no CO2 reading this tick")
             else:
-                self._latest = (result.ppm, result.temp_c, result.zone, time.strftime("%H:%M:%S"))
-                log.info("CO2=%s ppm zone=%s notify=%s", result.ppm, result.zone, bool(result.notifications))
+                self._latest = (result.ppm, result.temp_c, result.zone, time.strftime("%H:%M:%S"), result.trend)
+                log.info("CO2=%s ppm zone=%s trend=%s notify=%s", result.ppm, result.zone, result.trend, bool(result.notifications))
                 self._pending_notify.extend(result.notifications)
 
             time.sleep(self.cfg.get("poll_interval_seconds", 120))
@@ -144,9 +150,18 @@ class HolotekApp:
     def _update_ui(self, timer):
         latest = self._latest
         z = latest[2] if latest else "green"
-        self._status_item.button().setTitle_(MARKERS.get(z, MARKERS["green"]))
+        trend = latest[4] if latest else None
+        
+        if trend == "rising":
+            marker_key = f"{z}_up"
+        elif trend == "falling":
+            marker_key = f"{z}_down"
+        else:
+            marker_key = z
+        
+        self._status_item.button().setTitle_(MARKERS.get(marker_key, MARKERS["green"]))
         if latest is not None:
-            ppm, temp_c, zone_name, ts = latest
+            ppm, temp_c, zone_name, ts, _ = latest
             self._info_item.setTitle_(f"CO₂: {ppm} ppm ({zone_name or ''})")
             self._temp_item.setTitle_(f"Temp: {temp_c:.1f}°C" if temp_c is not None else "")
             self._time_item.setTitle_(f"as of {ts}")

@@ -52,6 +52,35 @@ sudo python3 -c "import co2meter; m=co2meter.CO2monitor(); print(m.read_data())"
 # expected: (datetime, co2_int, temp_float)
 ```
 
+## Running / verifying manually (agent notes)
+
+```bash
+./start.sh                       # nohup .venv/bin/python3 holotek.py --menubar, logs to /tmp/holotek_app.log
+tail -f /tmp/holotek_app.log     # watch it live
+kill $(cat /tmp/holotek-$(id -u).lock)   # stop it (no dedicated stop script)
+```
+
+- **Use `.venv/bin/python`, not system `python3`.** The system interpreter
+  doesn't have `hid`/`co2meter`/`pyobjc` installed — both `pytest` and any
+  ad-hoc script must run through `.venv/bin/python`, otherwise you get
+  `ModuleNotFoundError: No module named 'hid'` that looks like a real failure
+  but is just the wrong interpreter.
+- **No hardware attached ≠ broken.** Without a device, the log will show
+  `WARNING ... device gone; reconnecting` on a loop — that's expected, not a
+  crash. If a real zyTemp monitor is plugged in it reconnects automatically
+  and you'll see `INFO ... CO2=<n> ppm zone=<z> trend=<t> notify=<bool>` lines
+  each poll (`poll_interval_seconds` apart, 120s by default) — that's the
+  fastest way to confirm a change works end-to-end.
+- **Don't screenshot the whole desktop to check the menu bar icon.** A
+  full-screen `screencapture` grabs whatever else is on screen (other apps,
+  logged-in sessions, etc.), not just the status item. Also, `System Events`
+  menu-bar introspection via `osascript` needs Accessibility permission
+  granted to the terminal/agent first (`osascript is not allowed assistive
+  access (-1719)` otherwise) — don't try to grant that yourself. Verify via
+  the log + `ps -p <pid>` instead; only screenshot a tightly cropped region
+  (and only after checking with the user) if you actually need to see the
+  glyph render.
+
 ## Conventions locked by the design (don't "improve" these)
 
 - Zone boundaries are not up for debate:
