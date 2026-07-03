@@ -1,7 +1,11 @@
 import json
+import logging
 import subprocess
 import time
 from collections import deque
+from typing import NamedTuple, Optional
+
+log = logging.getLogger("holotek.core")
 
 CONFIG_PATH = "config.json"
 SEVERITY = {"green": 0, "yellow": 1, "red": 2}
@@ -147,10 +151,6 @@ def read_sensors(mon, retries=3):
     return None, None
 
 
-def read_ppm(mon, retries=3):
-    return read_sensors(mon, retries)[0]
-
-
 def send_notification(title, body):
     """Fire a macOS notification via osascript. Fixed 2-arg signature."""
     esc = lambda s: str(s).replace("\\", "\\\\").replace('"', '\\"')
@@ -189,3 +189,57 @@ def detect_trend(state, ppm, now, cfg):
         state["trend_last_notified_at"] = now
         return "rising"
     return None
+
+
+def _backoff_sleep(attempt, cap=60, base=10):
+    delay = min(base * (2 ** attempt), cap)
+    time.sleep(delay)
+
+
+def reconnect(cfg, attempts=10):
+    """Try to construct a CO2monitor with exponential backoff.
+
+    `attempts=None` retries forever (used for the blocking startup
+    connect); a finite `attempts` gives up and returns None so the
+    caller can wait for the next poll cycle instead of blocking it.
+    """
+    import co2meter
+    attempt = 0
+    while attempts is None or attempt < attempts:
+        try:
+            return co2meter.CO2monitor(bypass_decrypt=cfg.get("bypass_decrypt", False))
+        except Exception as e:
+            log.error("reconnect failed: %s", e)
+            _backoff_sleep(attempt)
+            attempt += 1
+    return None
+
+
+class TickResult(NamedTuple):
+    ppm: Optional[int]
+    temp_c: Optional[float]
+    zone: Optional[str]
+    notifications: list
+
+
+def poll_step(mon, state, cfg, now=None):
+    """One poll tick: read sensors, run decide() and detect_trend().
+
+    Never sleeps and never touches the UI — callers own delivery and
+    timing. `ppm` is None (with an empty notifications list) on a
+    failed read.
+    """
+    if now is None:
+        now = time.time()
+    ppm, temp_c = read_sensors(mon)
+    if ppm is None:
+        return TickResult(None, None, None, [])
+    z = zone(ppm, cfg["thresholds"])
+    notifications = []
+    out = decide(state, ppm, now, cfg)
+    if out:
+        notifications.append(out)
+    trend = detect_trend(state, ppm, now, cfg)
+    if trend == "rising":
+        notifications.append(("CO₂ rising fast", f"{ppm} ppm"))
+    return TickResult(ppm, temp_c, z, notifications)

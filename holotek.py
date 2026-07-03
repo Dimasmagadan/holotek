@@ -6,16 +6,9 @@ import signal
 import sys
 import time
 
-import co2meter
-
-from core import load_config, zone, decide, read_ppm, send_notification, detect_trend
+from core import load_config, send_notification, reconnect, poll_step
 
 log = logging.getLogger("holotek")
-
-
-def _backoff_sleep(attempt, cap=60, base=10):
-    delay = min(base * (2 ** attempt), cap)
-    time.sleep(delay)
 
 
 def _pid_alive(pid):
@@ -81,20 +74,7 @@ def main():
         return
 
     cfg = load_config(config_path)
-
-    def init_monitor():
-        attempt = 0
-        while True:
-            try:
-                return co2meter.CO2monitor(
-                    bypass_decrypt=cfg.get("bypass_decrypt", False)
-                )
-            except Exception as e:
-                log.error("device init failed: %s", e)
-                _backoff_sleep(attempt)
-                attempt += 1
-
-    mon = init_monitor()
+    mon = reconnect(cfg, attempts=None)
     state = {"last_zone": None, "last_notified_at": None, "last_notified_ppm": None}
 
     def on_sigint(*_):
@@ -111,36 +91,24 @@ def main():
 
         if not mon.is_alive:
             log.warning("device gone; reconnecting")
-            attempt = 0
-            while attempt < 10:
-                try:
-                    mon = co2meter.CO2monitor(
-                        bypass_decrypt=cfg.get("bypass_decrypt", False)
-                    )
-                    break
-                except Exception as e:
-                    log.error("reconnect failed: %s", e)
-                    _backoff_sleep(attempt)
-                    attempt += 1
-            else:
+            mon = reconnect(cfg)
+            if mon is None:
                 log.error("reconnect exhausted; waiting for next poll cycle")
                 time.sleep(cfg["poll_interval_seconds"])
                 continue
 
-        ppm = read_ppm(mon)
-        if ppm is None:
+        result = poll_step(mon, state, cfg)
+        if result.ppm is None:
             log.warning("no CO2 reading this tick")
-            time.sleep(cfg["poll_interval_seconds"])
-            continue
-
-        now = time.time()
-        out = decide(state, ppm, now, cfg)
-        log.info("CO2=%s ppm zone=%s notify=%s", ppm, zone(ppm, cfg["thresholds"]), bool(out))
-        if out:
-            send_notification(out[0], out[1])
-        trend = detect_trend(state, ppm, now, cfg)
-        if trend == "rising":
-            send_notification("CO₂ rising fast", f"{ppm} ppm")
+        else:
+            msg = "CO2=%s ppm zone=%s notify=%s"
+            log_args = [result.ppm, result.zone, bool(result.notifications)]
+            if result.temp_c is not None:
+                msg += " temp=%.1f"
+                log_args.append(result.temp_c)
+            log.info(msg, *log_args)
+            for title, body in result.notifications:
+                send_notification(title, body)
         time.sleep(cfg["poll_interval_seconds"])
 
 

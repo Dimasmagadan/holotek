@@ -5,14 +5,9 @@ import time
 import AppKit
 from Foundation import NSObject, NSTimer, NSRunLoop, NSDefaultRunLoopMode, NSBundle
 
-from core import load_config, zone, decide, read_sensors, detect_trend
+from core import load_config, reconnect, poll_step
 
 log = logging.getLogger("holotek.menubar")
-
-
-def _backoff_sleep(attempt, cap=60, base=10):
-    delay = min(base * (2 ** attempt), cap)
-    time.sleep(delay)
 
 
 MARKERS = {
@@ -39,10 +34,7 @@ class HolotekApp:
         self.cfg = load_config(self.config_path)
         self.mon = None
         self.state = {"last_zone": None, "last_notified_at": None, "last_notified_ppm": None}
-        self._latest_ppm = None
-        self._latest_temp = None
-        self._latest_zone = None
-        self._latest_time = None
+        self._latest = None  # (ppm, temp_c, zone, timestamp), set atomically
         self._pending_notify = []
         self._status_item = None
         self._delegate = None
@@ -104,19 +96,6 @@ class HolotekApp:
     def _quit(self, sender):
         AppKit.NSApplication.sharedApplication().terminate_(None)
 
-    def _reconnect(self):
-        from co2meter import CO2monitor
-        attempt = 0
-        while attempt < 10:
-            try:
-                self.mon = CO2monitor(bypass_decrypt=self.cfg.get("bypass_decrypt", False))
-                return True
-            except Exception as e:
-                log.error("reconnect failed: %s", e)
-                _backoff_sleep(attempt)
-                attempt += 1
-        return False
-
     def _poll_loop(self):
         while True:
             try:
@@ -126,27 +105,18 @@ class HolotekApp:
 
             if self.mon is None or not self.mon.is_alive:
                 log.warning("device gone; reconnecting")
-                if not self._reconnect():
+                self.mon = reconnect(self.cfg)
+                if self.mon is None:
                     time.sleep(self.cfg.get("poll_interval_seconds", 120))
                     continue
 
-            ppm, temp_c = read_sensors(self.mon)
-            if ppm is None:
+            result = poll_step(self.mon, self.state, self.cfg)
+            if result.ppm is None:
                 log.warning("no CO2 reading this tick")
             else:
-                z = zone(ppm, self.cfg["thresholds"])
-                self._latest_ppm = ppm
-                self._latest_temp = temp_c
-                self._latest_zone = z
-                self._latest_time = time.strftime("%H:%M:%S")
-                now = time.time()
-                out = decide(self.state, ppm, now, self.cfg)
-                log.info("CO2=%s ppm zone=%s notify=%s", ppm, z, bool(out))
-                if out:
-                    self._pending_notify.append(out)
-                trend = detect_trend(self.state, ppm, now, self.cfg)
-                if trend == "rising":
-                    self._pending_notify.append(("CO₂ rising fast", f"{ppm} ppm"))
+                self._latest = (result.ppm, result.temp_c, result.zone, time.strftime("%H:%M:%S"))
+                log.info("CO2=%s ppm zone=%s notify=%s", result.ppm, result.zone, bool(result.notifications))
+                self._pending_notify.extend(result.notifications)
 
             time.sleep(self.cfg.get("poll_interval_seconds", 120))
 
@@ -172,13 +142,14 @@ class HolotekApp:
         AppKit.NSUserNotificationCenter.defaultUserNotificationCenter().deliverNotification_(note)
 
     def _update_ui(self, timer):
-        z = self._latest_zone or "green"
+        latest = self._latest
+        z = latest[2] if latest else "green"
         self._status_item.button().setTitle_(MARKERS.get(z, MARKERS["green"]))
-        if self._latest_ppm is not None:
-            self._info_item.setTitle_(f"CO₂: {self._latest_ppm} ppm ({self._latest_zone or ''})")
-            if self._latest_temp is not None:
-                self._temp_item.setTitle_(f"Temp: {self._latest_temp:.1f}°C")
-            self._time_item.setTitle_(f"as of {self._latest_time}")
+        if latest is not None:
+            ppm, temp_c, zone_name, ts = latest
+            self._info_item.setTitle_(f"CO₂: {ppm} ppm ({zone_name or ''})")
+            self._temp_item.setTitle_(f"Temp: {temp_c:.1f}°C" if temp_c is not None else "")
+            self._time_item.setTitle_(f"as of {ts}")
         while self._pending_notify:
             title, body = self._pending_notify.pop(0)
             self._deliver_notification(title, body)

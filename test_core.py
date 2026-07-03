@@ -1,8 +1,12 @@
 import copy
 import time
+from collections import deque
 import pytest
 from unittest.mock import patch, MagicMock
-from core import decide, zone, validate, load_config, CONFIG_PATH, MESSAGES, read_sensors, detect_trend
+from core import (
+    decide, zone, validate, load_config, CONFIG_PATH, MESSAGES, read_sensors,
+    detect_trend, poll_step, reconnect, TickResult,
+)
 
 
 DEFAULTS = {
@@ -374,13 +378,6 @@ class TestReadSensors:
         assert ppm is None
         assert temp is None
 
-    def test_read_ppm_shim_returns_integer(self):
-        from core import read_ppm
-        dev_cls, _ = self._mock_hid([_make_packet(0x50, 650)])
-        with patch("hid.device", dev_cls):
-            result = read_ppm(_make_mon())
-        assert result == 650
-
 
 # \u2500\u2500 detect_trend() \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
@@ -473,3 +470,61 @@ class TestDetectTrend:
         # t=2400: cooldown elapsed (2400-600=1800, not < 1800); hist has [1800→2400] in window
         result = detect_trend(s, 1000, t0 + 2400.0, TREND_CFG)
         assert result == "rising"
+
+
+# ── poll_step() ──────────────────────────────────────────────────────────
+
+class TestPollStep:
+    def _mock_hid(self, packets):
+        h = MagicMock()
+        h.read.side_effect = packets + [[]]
+        return MagicMock(return_value=h)
+
+    def test_good_read_returns_ppm_temp_zone(self):
+        packets = [_make_packet(0x50, 750), _make_packet(0x42, 4722)]
+        dev_cls = self._mock_hid(packets)
+        s = mkstate()
+        with patch("hid.device", dev_cls):
+            result = poll_step(_make_mon(), s, DEFAULTS, now=0.0)
+        assert result.ppm == 750
+        assert result.temp_c == pytest.approx(4722 * 0.0625 - 273.15, abs=0.01)
+        assert result.zone == "green"
+        assert result.notifications == []  # first sample never notifies
+
+    def test_read_failure_returns_empty_tick(self):
+        dev_cls = MagicMock()
+        dev_cls.return_value.open_path.side_effect = OSError("no device")
+        s = mkstate()
+        with patch("hid.device", dev_cls):
+            result = poll_step(_make_mon(), s, DEFAULTS, now=0.0)
+        assert result == TickResult(None, None, None, [])
+
+    def test_escalation_produces_decide_notification(self):
+        dev_cls = self._mock_hid([_make_packet(0x50, 900)])
+        s = mkstate(last_zone="green", last_notified_ppm=500, last_notified_at=0)
+        with patch("hid.device", dev_cls):
+            result = poll_step(_make_mon(), s, DEFAULTS, now=1.0)
+        assert result.notifications == [("CO2 rising", "900 ppm")]
+
+    def test_escalation_plus_fast_rise_produces_two_notifications_in_order(self):
+        dev_cls = self._mock_hid([_make_packet(0x50, 900)])
+        s = mkstate(last_zone="green", last_notified_ppm=500, last_notified_at=0)
+        s["trend_history"] = deque([(0.0, 500)])
+        with patch("hid.device", dev_cls):
+            result = poll_step(_make_mon(), s, TREND_CFG, now=600.0)
+        assert result.notifications == [
+            ("CO2 rising", "900 ppm"),
+            ("CO₂ rising fast", "900 ppm"),
+        ]
+
+
+# ── reconnect() ──────────────────────────────────────────────────────────
+
+class TestReconnect:
+    def test_gives_up_after_attempts_returns_none(self, monkeypatch):
+        import core
+        monkeypatch.setattr(core, "_backoff_sleep", lambda *a, **k: None)
+        with patch("co2meter.CO2monitor", side_effect=RuntimeError("no device")) as ctor:
+            result = reconnect(DEFAULTS, attempts=3)
+        assert result is None
+        assert ctor.call_count == 3
