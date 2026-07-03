@@ -83,7 +83,7 @@ def decide(state, ppm, now, cfg):
             fire = True
 
     if not fire:
-        if not (curr_zone == "green" and prev_zone in ("yellow", "red")):
+        if SEVERITY[curr_zone] >= SEVERITY[prev_zone]:
             state["last_zone"] = z
         return None
 

@@ -90,6 +90,26 @@ class TestDecide:
         s = mkstate(last_zone="red", last_notified_ppm=1500, last_notified_at=0)
         out = decide(s, 1000, COOLDOWN_WITHIN, DEFAULTS)
         assert out is None
+        assert s["last_zone"] == "red"  # held back so "improving" can fire later
+
+    def test_suppressed_improving_then_fires_improving_after_cooldown(self):
+        s = mkstate(last_zone="red", last_notified_ppm=1500, last_notified_at=0)
+        out1 = decide(s, 1000, COOLDOWN_WITHIN, DEFAULTS)
+        assert out1 is None
+        assert s["last_zone"] == "red"
+        out2 = decide(s, 1000, COOLDOWN_PAST, DEFAULTS)
+        assert out2 is not None
+        assert out2[0] == "CO2 improving"
+        assert s["last_notified_ppm"] == 1500
+
+    def test_suppressed_improving_then_red_refires_high_semantics(self):
+        s = mkstate(last_zone="red", last_notified_ppm=1500, last_notified_at=0)
+        out1 = decide(s, 1000, COOLDOWN_WITHIN, DEFAULTS)
+        assert out1 is None
+        assert s["last_zone"] == "red"
+        out2 = decide(s, 1600, COOLDOWN_PAST, DEFAULTS)
+        assert out2 is not None
+        assert out2[0] == "CO2 RED"
 
     def test_red_to_yellow_improving_past_cooldown_fires(self):
         s = mkstate(last_zone="red", last_notified_ppm=1500, last_notified_at=0)
