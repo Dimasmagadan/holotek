@@ -2,7 +2,7 @@ import copy
 import time
 import pytest
 from unittest.mock import patch, MagicMock
-from core import decide, zone, validate, load_config, CONFIG_PATH, MESSAGES, marker_for, read_sensors, detect_trend
+from core import decide, zone, validate, load_config, CONFIG_PATH, MESSAGES, read_sensors, detect_trend
 
 
 DEFAULTS = {
@@ -303,23 +303,6 @@ class TestValidate:
         v["trend_cooldown_seconds"] = -1
         with pytest.raises(ValueError):
             validate(v)
-
-
-# ── marker_for() ─────────────────────────────────────────────────────────────
-
-class TestMarker:
-    def test_green(self):
-        assert marker_for("green") == "\u25CF"
-
-    def test_yellow(self):
-        assert marker_for("yellow") == "\U0001F7E1"
-
-    def test_red(self):
-        assert marker_for("red") == "\U0001F534"
-
-    def test_unknown_fallback(self):
-        assert marker_for("bogus") == "\u25CF"
-
 
 # \u2500\u2500 read_sensors() \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
