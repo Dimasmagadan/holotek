@@ -5,7 +5,7 @@ import pytest
 from unittest.mock import patch, MagicMock
 from core import (
     decide, zone, validate, load_config, CONFIG_PATH, MESSAGES, read_sensors,
-    detect_trend, poll_step, reconnect, TickResult,
+    detect_trend, poll_step, reconnect, TickResult, _drain_hid, _DeviceHandle,
 )
 
 
@@ -14,7 +14,6 @@ DEFAULTS = {
     "poll_interval_seconds": 120,
     "notification_cooldown_seconds": 1800,
     "green_reentry_drop_ppm": 200,
-    "bypass_decrypt": False,
 }
 
 COOLDOWN_PAST = 9999  # large enough to always be past cooldown
@@ -251,12 +250,6 @@ class TestValidate:
         with pytest.raises(ValueError):
             validate(v)
 
-    def test_bypass_decrypt_must_be_bool(self):
-        v = mkconfig()
-        v["bypass_decrypt"] = "yes"
-        with pytest.raises(ValueError):
-            validate(v)
-
     def test_poll_interval_zero_rejected(self):
         v = mkconfig()
         v["poll_interval_seconds"] = 0
@@ -323,70 +316,138 @@ def _make_mon(path=b"/dev/fake"):
     return mon
 
 
-class TestReadSensors:
-    def _mock_hid(self, packets):
+def _make_handle_mon(packets, path=b"/dev/fake"):
+    """Real _DeviceHandle with a mocked HID handle pre-loaded with `packets`.
+
+    Bypasses `_ensure_open` (which would `send_feature_report` on the mock),
+    so the test controls the buffer exactly. read_sensors uses mon.drain()
+    which delegates to _drain_hid on the mock handle."""
+    mon = _DeviceHandle(path)
+    h = MagicMock()
+    h.read.side_effect = packets + [[]]
+    mon._h = h
+    return mon
+
+
+# ── _drain_hid() ────────────────────────────────────────────────────────────
+
+class TestDrainHid:
+    """Drives the buffer-draining primitive directly. The whole fix lives
+    here: every valid packet overwrites the previous so we return the
+    FRESHEST reading, not the stale head-of-queue one."""
+
+    def _h(self, packets):
         h = MagicMock()
         h.read.side_effect = packets + [[]]
-        dev_cls = MagicMock(return_value=h)
-        return dev_cls, h
+        return h
 
-    def test_returns_co2_ppm(self):
-        dev_cls, _ = self._mock_hid([_make_packet(0x50, 750)])
-        with patch("hid.device", dev_cls):
-            ppm, temp = read_sensors(_make_mon())
-        assert ppm == 750
-        assert temp is None
+    def test_returns_last_co2_when_multiple_in_buffer(self):
+        packets = [_make_packet(0x50, 700), _make_packet(0x50, 750), _make_packet(0x50, 800)]
+        ppm, _ = _drain_hid(self._h(packets))
+        assert ppm == 800
 
-    def test_returns_both_co2_and_temp(self):
-        # val=4722 \u2192 4722 * 0.0625 - 273.15 = 22.0125
-        packets = [_make_packet(0x50, 750), _make_packet(0x42, 4722)]
-        dev_cls, _ = self._mock_hid(packets)
-        with patch("hid.device", dev_cls):
-            ppm, temp = read_sensors(_make_mon())
-        assert ppm == 750
-        assert temp == pytest.approx(4722 * 0.0625 - 273.15, abs=0.01)
-
-    def test_temp_conversion_formula(self):
-        packets = [_make_packet(0x50, 800), _make_packet(0x42, 4739)]
-        dev_cls, _ = self._mock_hid(packets)
-        with patch("hid.device", dev_cls):
-            _, temp = read_sensors(_make_mon())
+    def test_returns_last_co2_and_last_temp_interleaved(self):
+        packets = [
+            _make_packet(0x50, 700),
+            _make_packet(0x42, 4722),  # 22.01 °C
+            _make_packet(0x50, 800),
+            _make_packet(0x42, 4739),  # 22.11 °C
+        ]
+        ppm, temp = _drain_hid(self._h(packets))
+        assert ppm == 800
         assert temp == pytest.approx(4739 * 0.0625 - 273.15, abs=0.01)
 
     def test_bad_end_marker_skipped(self):
         bad = [0x50, 0x02, 0xEE, 0x40, 0xFF, 0, 0, 0]  # end != 0x0D
         good = _make_packet(0x50, 750)
-        dev_cls, _ = self._mock_hid([bad, good])
-        with patch("hid.device", dev_cls):
-            ppm, _ = read_sensors(_make_mon())
+        ppm, _ = _drain_hid(self._h([bad, good]))
         assert ppm == 750
 
     def test_bad_checksum_skipped(self):
         bad = _make_packet(0x50, 750)
         bad[3] = 0x00  # corrupt checksum
         good = _make_packet(0x50, 900)
-        dev_cls, _ = self._mock_hid([bad, good])
-        with patch("hid.device", dev_cls):
-            ppm, _ = read_sensors(_make_mon())
+        ppm, _ = _drain_hid(self._h([bad, good]))
         assert ppm == 900
 
-    def test_open_failure_returns_none_none(self):
-        dev_cls = MagicMock()
-        dev_cls.return_value.open_path.side_effect = OSError("no device")
-        with patch("hid.device", dev_cls):
-            ppm, temp = read_sensors(_make_mon(), retries=1)
+    def test_empty_buffer_returns_none_none(self):
+        h = MagicMock()
+        h.read.return_value = []
+        ppm, temp = _drain_hid(h)
         assert ppm is None
         assert temp is None
 
-    def test_open_fails_once_then_succeeds(self):
-        failing = MagicMock()
-        failing.open_path.side_effect = OSError("no device")
-        good_h = MagicMock()
-        good_h.read.side_effect = [_make_packet(0x50, 750), []]
-        dev_cls = MagicMock(side_effect=[failing, good_h])
-        with patch("hid.device", dev_cls):
-            ppm, temp = read_sensors(_make_mon(), retries=2)
+    def test_first_read_uses_first_timeout_then_rest(self):
+        """Verify timeouts: first read uses first_timeout_ms, the rest use
+        rest_timeout_ms. This is what lets the buffer drain quickly without
+        hanging on an empty queue."""
+        h = MagicMock()
+        h.read.side_effect = [_make_packet(0x50, 750), []]
+        _drain_hid(h, first_timeout_ms=2000, rest_timeout_ms=200)
+        assert h.read.call_args_list[0].kwargs["timeout_ms"] == 2000
+        assert h.read.call_args_list[1].kwargs["timeout_ms"] == 200
+
+
+# ── read_sensors() ─────────────────────────────────────────────────────────
+
+class TestReadSensors:
+    def test_returns_co2_ppm(self):
+        mon = _make_handle_mon([_make_packet(0x50, 750)])
+        ppm, temp = read_sensors(mon)
         assert ppm == 750
+        assert temp is None
+
+    def test_returns_both_co2_and_temp(self):
+        # val=4722 → 4722 * 0.0625 - 273.15 = 22.0125
+        packets = [_make_packet(0x50, 750), _make_packet(0x42, 4722)]
+        mon = _make_handle_mon(packets)
+        ppm, temp = read_sensors(mon)
+        assert ppm == 750
+        assert temp == pytest.approx(4722 * 0.0625 - 273.15, abs=0.01)
+
+    def test_temp_conversion_formula(self):
+        packets = [_make_packet(0x50, 800), _make_packet(0x42, 4739)]
+        mon = _make_handle_mon(packets)
+        _, temp = read_sensors(mon)
+        assert temp == pytest.approx(4739 * 0.0625 - 273.15, abs=0.01)
+
+    def test_returns_last_co2_when_multiple_in_buffer(self):
+        """Stale packets at the head of the HID buffer must not leak into
+        the reading — the FRESHEST CO2 wins."""
+        packets = [_make_packet(0x50, 700), _make_packet(0x50, 750), _make_packet(0x50, 800)]
+        mon = _make_handle_mon(packets)
+        ppm, _ = read_sensors(mon)
+        assert ppm == 800
+
+    def test_drain_exception_invalidates_and_retries(self, monkeypatch):
+        """If drain raises, read_sensors must invalidate the handle and
+        retry — the next tick's reconnect flow can re-open it."""
+        monkeypatch.setattr("core.time.sleep", lambda _: None)
+        mon = _DeviceHandle(b"/dev/fake")
+        mon.drain = MagicMock(side_effect=[OSError("io error"), (750, None)])
+        mon.invalidate = MagicMock()
+        ppm, temp = read_sensors(mon, retries=2)
+        assert ppm == 750
+        assert mon.drain.call_count == 2
+        mon.invalidate.assert_called_once()
+
+    def test_all_drains_empty_returns_none(self, monkeypatch):
+        monkeypatch.setattr("core.time.sleep", lambda _: None)
+        mon = _DeviceHandle(b"/dev/fake")
+        mon.drain = MagicMock(return_value=(None, None))
+        mon.invalidate = MagicMock()
+        ppm, temp = read_sensors(mon, retries=3)
+        assert ppm is None
+        assert temp is None
+        assert mon.drain.call_count == 3
+
+    def test_first_drain_empty_second_succeeds(self, monkeypatch):
+        monkeypatch.setattr("core.time.sleep", lambda _: None)
+        mon = _DeviceHandle(b"/dev/fake")
+        mon.drain = MagicMock(side_effect=[(None, None), (900, None)])
+        mon.invalidate = MagicMock()
+        ppm, temp = read_sensors(mon, retries=3)
+        assert ppm == 900
 
 
 # \u2500\u2500 detect_trend() \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
@@ -486,43 +547,37 @@ class TestDetectTrend:
 # ── poll_step() ──────────────────────────────────────────────────────────
 
 class TestPollStep:
-    def _mock_hid(self, packets):
-        h = MagicMock()
-        h.read.side_effect = packets + [[]]
-        return MagicMock(return_value=h)
-
     def test_good_read_returns_ppm_temp_zone(self):
         packets = [_make_packet(0x50, 750), _make_packet(0x42, 4722)]
-        dev_cls = self._mock_hid(packets)
+        mon = _make_handle_mon(packets)
         s = mkstate()
-        with patch("hid.device", dev_cls):
-            result = poll_step(_make_mon(), s, DEFAULTS, now=0.0)
+        result = poll_step(mon, s, DEFAULTS, now=0.0)
         assert result.ppm == 750
         assert result.temp_c == pytest.approx(4722 * 0.0625 - 273.15, abs=0.01)
         assert result.zone == "green"
         assert result.notifications == []  # first sample never notifies
 
-    def test_read_failure_returns_empty_tick(self):
-        dev_cls = MagicMock()
-        dev_cls.return_value.open_path.side_effect = OSError("no device")
+    def test_read_failure_returns_empty_tick(self, monkeypatch):
+        # drain raises → read_sensors returns (None, None) → empty tick
+        monkeypatch.setattr("core.time.sleep", lambda _: None)
+        mon = _DeviceHandle(b"/dev/fake")
+        mon.drain = MagicMock(side_effect=OSError("no device"))
+        mon.invalidate = MagicMock()
         s = mkstate()
-        with patch("hid.device", dev_cls):
-            result = poll_step(_make_mon(), s, DEFAULTS, now=0.0)
+        result = poll_step(mon, s, DEFAULTS, now=0.0)
         assert result == TickResult(None, None, None, [])
 
     def test_escalation_produces_decide_notification(self):
-        dev_cls = self._mock_hid([_make_packet(0x50, 900)])
+        mon = _make_handle_mon([_make_packet(0x50, 900)])
         s = mkstate(last_zone="green", last_notified_ppm=500, last_notified_at=0)
-        with patch("hid.device", dev_cls):
-            result = poll_step(_make_mon(), s, DEFAULTS, now=1.0)
+        result = poll_step(mon, s, DEFAULTS, now=1.0)
         assert result.notifications == [("CO2 rising", "900 ppm")]
 
     def test_escalation_plus_fast_rise_produces_two_notifications_in_order(self):
-        dev_cls = self._mock_hid([_make_packet(0x50, 900)])
+        mon = _make_handle_mon([_make_packet(0x50, 900)])
         s = mkstate(last_zone="green", last_notified_ppm=500, last_notified_at=0)
         s["trend_history"] = deque([(0.0, 500)])
-        with patch("hid.device", dev_cls):
-            result = poll_step(_make_mon(), s, TREND_CFG, now=600.0)
+        result = poll_step(mon, s, TREND_CFG, now=600.0)
         assert result.notifications == [
             ("CO2 rising", "900 ppm"),
             ("CO₂ rising fast", "900 ppm"),
@@ -540,21 +595,68 @@ class TestPollStep:
         fired = []
         for i, ppm in enumerate(readings):
             now = (i + 1) * 120.0
-            dev_cls = self._mock_hid([_make_packet(0x50, ppm)])
-            with patch("hid.device", dev_cls):
-                result = poll_step(_make_mon(), s, TREND_CFG, now=now)
+            mon = _make_handle_mon([_make_packet(0x50, ppm)])
+            result = poll_step(mon, s, TREND_CFG, now=now)
             assert result.trend == "rising"
             fired.append(("CO₂ rising fast", f"{ppm} ppm") in result.notifications)
         assert fired == [True, False, False]
 
 
-# ── reconnect() ──────────────────────────────────────────────────────────
+# ── reconnect() / _DeviceHandle ──────────────────────────────────────────
 
 class TestReconnect:
     def test_gives_up_after_attempts_returns_none(self, monkeypatch):
         import core
         monkeypatch.setattr(core, "_backoff_sleep", lambda *a, **k: None)
-        with patch("co2meter.CO2monitor", side_effect=RuntimeError("no device")) as ctor:
+        with patch("hid.enumerate", return_value=[]):
             result = reconnect(DEFAULTS, attempts=3)
         assert result is None
-        assert ctor.call_count == 3
+
+    def test_returns_device_handle_when_found(self):
+        iface = {"path": b"/dev/fake"}
+        fake_h = MagicMock()
+        with patch("hid.enumerate", return_value=[iface]), \
+             patch("hid.device", MagicMock(return_value=fake_h)):
+            handle = reconnect(DEFAULTS, attempts=1)
+        assert handle is not None
+        assert handle._info["path"] == b"/dev/fake"
+
+    def test_reconnect_sends_magic_feature_report(self):
+        """Stream activation on rev 2.00 needs the magic feature-report —
+        without it no packets arrive. reconnect must send it once on open."""
+        iface = {"path": b"/dev/fake"}
+        fake_h = MagicMock()
+        with patch("hid.enumerate", return_value=[iface]), \
+             patch("hid.device", MagicMock(return_value=fake_h)):
+            reconnect(DEFAULTS, attempts=1)
+        fake_h.send_feature_report.assert_called_once_with([0x00, 0, 0, 0, 0, 0, 0, 0, 0])
+
+    def test_is_alive_true_when_handle_open(self):
+        handle = _DeviceHandle(b"/dev/fake")
+        handle._h = MagicMock()  # simulate open
+        assert handle.is_alive is True
+
+    def test_is_alive_false_when_handle_not_open(self):
+        handle = _DeviceHandle(b"/dev/fake")
+        assert handle.is_alive is False
+
+    def test_invalidate_clears_handle(self):
+        handle = _DeviceHandle(b"/dev/fake")
+        h = MagicMock()
+        handle._h = h
+        handle.invalidate()
+        h.close.assert_called_once()
+        assert handle._h is None
+        assert handle.is_alive is False
+
+    def test_drain_uses_persistent_handle(self):
+        """drain() must reuse the existing handle, not open a new one each
+        call — that's the whole reason _DeviceHandle exists."""
+        handle = _DeviceHandle(b"/dev/fake")
+        h = MagicMock()
+        h.read.side_effect = [_make_packet(0x50, 750), []]
+        handle._h = h
+        ppm, _ = handle.drain()
+        assert ppm == 750
+        # No new hid.device() should have been created
+        assert handle._h is h

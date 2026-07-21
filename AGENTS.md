@@ -19,13 +19,31 @@ core; `config.json` is hot-reloaded every poll. Menu-bar mode (`menubar.py`,
 
 ## Non-obvious facts an agent will get wrong
 
-- **Device rev 2.00 = NO encryption.** There are two hardware revisions:
-  old (serial 1.40, bcdDevice 0x0100) sends XOR-encrypted packets; new
-  (serial 2.00, bcdDevice 0x0200 — this one) sends **plaintext**. `dmage/co2mon`
-  auto-detects: `release_number > 0x0100 → decode_data = 0`.
-  Our `read_ppm()` in `core.py` reads raw HID directly and validates plaintext
-  (opcode 0x50, checksum, end marker 0x0D). Do NOT use `co2meter.read_data_raw()`
-  — it sends a feature report that disrupts streaming on rev 2.00.
+- **Device rev 2.00 = NO encryption, but it DOES need stream activation.**
+  Two hardware revisions: old (serial 1.40, bcdDevice 0x0100) sends
+  XOR-encrypted packets; new (serial 2.00, bcdDevice 0x0200 — this one)
+  sends **plaintext**. `dmage/co2mon` auto-detects: `release_number >
+  0x0100 → decode_data = 0`. Our `read_sensors()` in `core.py` reads raw
+  HID directly and validates plaintext (opcode 0x50, checksum, end marker
+  0x0D). The magic feature-report (`send_feature_report([0x00]+[0]*8)`)
+  is REQUIRED to start streaming on rev 2.00 — without it no packets
+  arrive after a fresh `open_path`. AGENTS.md previously claimed feature
+  reports "disrupt streaming" — that was wrong: they ACTIVATE it, with
+  ~2 s latency before the first packet. We no longer use `co2meter` at
+  all; `_DeviceHandle` opens `hid.device()` directly and sends the
+  feature-report exactly once in `_ensure_open`.
+- **The HID handle must stay OPEN between polls.** Closing it lets macOS
+  stop streaming, and re-opening + re-activating costs ~2 s on the next
+  read. `_DeviceHandle` caches the handle in `self._h`; `read_sensors`
+  drains via `mon.drain()` without touching `hid.device()` again. With a
+  persistent handle, each drain takes ~100–200 ms.
+- **Drain the WHOLE buffer every poll.** The macOS HID driver buffers
+  every packet the device streams (~1 pkt/s). At `poll_interval_seconds=
+  120` that's ~120 queued packets. Reading FIFO returns the STALEST
+  packet, not the current one — that was the original "app shows a
+  different CO2 than the device screen" bug. `_drain_hid` reads until
+  `h.read()` returns `[]`, with every valid packet overwriting the
+  previous; the function returns the FRESHEST reading.
 - **macOS raw HID ≠ "Input Monitoring".** Input Monitoring is for keystroke
   capture and is irrelevant here. First run may need `sudo`; otherwise rely on
   the brew `libusb`/`hidapi` user-space libs.
@@ -47,9 +65,9 @@ core; `config.json` is hot-reloaded every poll. Menu-bar mode (`menubar.py`,
 
 ```bash
 brew install libusb hidapi
-pip install hidapi co2meter
-sudo python3 -c "import co2meter; m=co2meter.CO2monitor(); print(m.read_data())"
-# expected: (datetime, co2_int, temp_float)
+pip install -r requirements.txt
+# Smoke test (must print a non-empty packet list):
+python3 -c "import hid; h=hid.device(); h.open_path(hid.enumerate(0x04d9,0xa052)[0]['path']); h.send_feature_report([0x00]+[0]*8); print(h.read(8, timeout_ms=3000))"
 ```
 
 ## Running / verifying manually (agent notes)
@@ -61,7 +79,7 @@ kill $(cat /tmp/holotek-$(id -u).lock)   # stop it (no dedicated stop script)
 ```
 
 - **Use `.venv/bin/python`, not system `python3`.** The system interpreter
-  doesn't have `hid`/`co2meter`/`pyobjc` installed — both `pytest` and any
+  doesn't have `hid`/`pyobjc` installed — both `pytest` and any
   ad-hoc script must run through `.venv/bin/python`, otherwise you get
   `ModuleNotFoundError: No module named 'hid'` that looks like a real failure
   but is just the wrong interpreter.
@@ -130,7 +148,11 @@ nikvoronin/Co2.Monitor (C#). Upstream RE sources:
 
 ## Source of truth for the device API
 
-Upstream `vfilimonov/co2meter` — https://github.com/vfilimonov/co2meter.
-If prose docs and the library disagree, trust the library.
-**However:** for rev 2.00 devices, bypass `co2meter.read_data_raw()` entirely
-(see `core.py:read_ppm()`).
+Historical reference: upstream `vfilimonov/co2meter` — https://github.com/vfilimonov/co2meter.
+We **no longer depend on `co2meter`** — `_DeviceHandle` in `core.py` opens
+`hid.device()` directly. The library was useful for confirming the protocol
+(opcode 0x50 = CO2, 0x42 = temp, magic feature-report activates the stream),
+but its `read_data_raw()` re-opens and re-sends the feature-report on every
+call, which is wasteful and was the source of long-standing confusion about
+whether feature-reports "disrupt" streaming (they don't — they activate it).
+

@@ -38,9 +38,6 @@ def validate(cfg):
         raise ValueError("notification_cooldown_seconds must be >= 0")
     if cfg["green_reentry_drop_ppm"] < 0:
         raise ValueError("green_reentry_drop_ppm must be >= 0")
-    v = cfg.get("bypass_decrypt", False)
-    if not isinstance(v, bool):
-        raise ValueError("bypass_decrypt must be a boolean")
     if "trend_window_seconds" in cfg:
         v = cfg["trend_window_seconds"]
         if not isinstance(v, int) or isinstance(v, bool) or v < 120:
@@ -117,37 +114,63 @@ def decide(state, ppm, now, cfg):
     return title, f"{ppm} ppm"
 
 
+_VID = 0x04d9
+_PID = 0xa052
+_MAGIC_FEATURE_REPORT = [0x00, 0, 0, 0, 0, 0, 0, 0, 0]
+
+
+def _valid_packet(raw):
+    """True if `raw` is a well-formed plaintext zyTemp packet (rev 2.00)."""
+    if len(raw) < 8:
+        return False
+    if raw[4] != 0x0D or raw[5] != 0 or raw[6] != 0 or raw[7] != 0:
+        return False
+    op, val_hi, val_lo, chk = raw[0], raw[1], raw[2], raw[3]
+    return (op + val_hi + val_lo) & 0xFF == chk
+
+
+def _drain_hid(h, first_timeout_ms=2000, rest_timeout_ms=200):
+    """Read packets until the HID buffer is empty, return (last_ppm, last_temp).
+
+    The first read uses a longer timeout in case the buffer is empty and we
+    must wait for the next packet. Every valid packet OVERWRITES the previous
+    value, so the result is the freshest reading in the buffer — not the
+    stalest, which is what FIFO reads used to return."""
+    ppm = temp_c = None
+    raw = h.read(8, timeout_ms=first_timeout_ms)
+    while raw:
+        if _valid_packet(raw):
+            op, val_hi, val_lo = raw[0], raw[1], raw[2]
+            val = (val_hi << 8) | val_lo
+            if op == 0x50:
+                ppm = val
+            elif op == 0x42:
+                temp_c = val * 0.0625 - 273.15
+        raw = h.read(8, timeout_ms=rest_timeout_ms)
+    return ppm, temp_c
+
+
 def read_sensors(mon, retries=3):
-    """Return (co2_ppm, temp_c) from direct HID read. Either may be None."""
-    import hid
+    """Return (co2_ppm, temp_c) from the freshest packets in the HID buffer.
+
+    Uses the persistent handle on `mon`. On HID errors, invalidates the
+    handle so the caller's reconnect logic can re-open it on the next
+    tick. Each call drains the WHOLE buffer — every valid packet
+    overwrites the previous, so the result is the freshest reading, not
+    the stale head-of-queue packet that used to leak through."""
     for _ in range(retries):
         try:
-            h = hid.device()
-            h.open_path(mon._info["path"])
-        except Exception:
+            ppm, temp_c = mon.drain()
+        except Exception as e:
+            log.warning("drain failed: %s", e)
+            mon.invalidate()
             continue
-        try:
-            ppm = temp_c = None
-            for _ in range(20):
-                raw = h.read(8, timeout_ms=2000)
-                if not raw:
-                    break
-                op, val_hi, val_lo, chk, end = raw[0], raw[1], raw[2], raw[3], raw[4]
-                if end != 0x0D or raw[5] != 0 or raw[6] != 0 or raw[7] != 0:
-                    continue
-                if (op + val_hi + val_lo) & 0xFF != chk:
-                    continue
-                val = (val_hi << 8) | val_lo
-                if op == 0x50:
-                    ppm = val
-                elif op == 0x42:
-                    temp_c = val * 0.0625 - 273.15
-                if ppm is not None and temp_c is not None:
-                    break
-            if ppm is not None:
-                return ppm, temp_c
-        finally:
-            h.close()
+        if ppm is not None:
+            return ppm, temp_c
+        # Buffer drained empty. The device streams ~1 CO2 packet per 1.5s;
+        # wait briefly so the next drain has something to read instead of
+        # burning all retries in a tight loop.
+        time.sleep(0.5)
     return None, None
 
 
@@ -199,22 +222,79 @@ def _backoff_sleep(attempt, cap=60, base=10):
     time.sleep(delay)
 
 
-def reconnect(cfg, attempts=10):
-    """Try to construct a CO2monitor with exponential backoff.
+class _DeviceHandle:
+    """Holds a PERSISTENT HID handle to the zyTemp device.
 
-    `attempts=None` retries forever (used for the blocking startup
-    connect); a finite `attempts` gives up and returns None so the
-    caller can wait for the next poll cycle instead of blocking it.
+    The handle must stay open between polls: closing it lets macOS stop
+    streaming from the device, and re-activating the stream with the magic
+    feature-report costs ~2s of latency on the next read. With a persistent
+    handle, drain takes ~100ms and always returns fresh packets.
     """
-    import co2meter
+
+    def __init__(self, path):
+        self._info = {"path": path}
+        self._h = None
+
+    def _ensure_open(self):
+        if self._h is None:
+            import hid
+            h = hid.device()
+            h.open_path(self._info["path"])
+            # The magic feature-report starts the device streaming on rev
+            # 2.00. AGENTS.md claimed it disrupts streaming — that's wrong:
+            # without it, no packets ever arrive after a fresh open.
+            h.send_feature_report(_MAGIC_FEATURE_REPORT)
+            self._h = h
+
+    def drain(self, first_timeout_ms=2000, rest_timeout_ms=200):
+        """Read packets until the buffer is empty. Returns (last_ppm, last_temp)."""
+        self._ensure_open()
+        return _drain_hid(self._h, first_timeout_ms, rest_timeout_ms)
+
+    def invalidate(self):
+        """Drop the current handle — caller will reconnect or retry."""
+        if self._h is not None:
+            try:
+                self._h.close()
+            except Exception:
+                pass
+            self._h = None
+
+    @property
+    def is_alive(self):
+        """Cheap liveness probe — just checks the handle is still open.
+
+        A real IOError surfaces only on the next read; read_sensors handles
+        that by invalidating and reconnecting on the next tick."""
+        return self._h is not None
+
+
+def _find_device_path():
+    """Return the HID path of the first zyTemp CO2 device, or None."""
+    import hid
+    ifaces = hid.enumerate(_VID, _PID)
+    return ifaces[0]["path"] if ifaces else None
+
+
+def reconnect(cfg, attempts=10):
+    """Find the CO2 device and open a persistent handle to it.
+
+    Returns a _DeviceHandle on success, or None when `attempts` is finite
+    and exhausted. `attempts=None` retries forever (used for the blocking
+    startup connect)."""
     attempt = 0
     while attempts is None or attempt < attempts:
-        try:
-            return co2meter.CO2monitor(bypass_decrypt=cfg.get("bypass_decrypt", False))
-        except Exception as e:
-            log.error("reconnect failed: %s", e)
-            _backoff_sleep(attempt)
-            attempt += 1
+        path = _find_device_path()
+        if path is not None:
+            handle = _DeviceHandle(path)
+            try:
+                handle._ensure_open()
+            except Exception as e:
+                log.warning("initial stream activation failed: %s", e)
+            return handle
+        log.error("reconnect failed: no CO2 device found")
+        _backoff_sleep(attempt)
+        attempt += 1
     return None
 
 

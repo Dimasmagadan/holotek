@@ -28,13 +28,11 @@ pip install -r requirements.txt
 Проверить, что датчик определяется:
 
 ```bash
-python3 -c "import co2meter; m=co2meter.CO2monitor(); print(m.read_data_raw())"
-# Ожидается: (datetime, co2_int, temp_float)
+python3 -c "import hid; h=hid.device(); h.open_path(hid.enumerate(0x04d9,0xa052)[0]['path']); h.send_feature_report([0x00]+[0]*8); print(h.read(8, timeout_ms=3000))"
+# Ожидается: [80, hi, lo, chk, 13, 0, 0, 0] — пакет CO2 (opcode 0x50)
 ```
 
 Если ошибка доступа — macOS HID-драйвер занял устройство. Запустите ту же команду с `sudo` один раз, затем отключите и снова подключите датчик. После этого доступ из пользовательского пространства работает без `sudo`.
-
-Если зависает — установите `"bypass_decrypt": true` в `config.json`.
 
 ## Использование
 
@@ -62,7 +60,6 @@ python3 holotek.py [--config ...]       # фоновый режим в терм�
 | `poll_interval_seconds` | 120 | > 0 | секунд между опросами датчика |
 | `notification_cooldown_seconds` | 1800 | ≥ 0 | секунд между повторными уведомлениями в одной зоне |
 | `green_reentry_drop_ppm` | 200 | ≥ 0 | падение ppm, при котором «возврат в норму» срабатывает мгновенно даже внутри задержки |
-| `bypass_decrypt` | false | boolean | отключить XOR-дешифровку для устройств без шифрования |
 | `trend_window_seconds` | 600 | целое ≥ 120 | окно истории для расчёта скорости изменения ppm |
 | `trend_alert_ppm_per_min` | 5.0 | число > 0 | порог скорости роста (ppm/мин), при котором срабатывает «CO₂ rising fast» |
 | `trend_cooldown_seconds` | 1800 | целое ≥ 0 | секунд между повторными трендовыми уведомлениями |
