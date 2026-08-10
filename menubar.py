@@ -33,6 +33,9 @@ class _AppDelegate(NSObject):
     def quit_(self, sender):
         self._app_ref._quit(sender)
 
+    def refreshNow_(self, sender):
+        self._app_ref._refresh_now(sender)
+
 
 class HolotekApp:
     def __init__(self, config_path="config.json"):
@@ -45,6 +48,7 @@ class HolotekApp:
         self._status_item = None
         self._delegate = None
         self._un_center = None
+        self._sensor_unavailable = False
 
     def on_launched(self):
         # Set bundle identifier so UNUserNotificationCenter can deliver notifications
@@ -79,6 +83,10 @@ class HolotekApp:
         self._time_item = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
             "", None, ""
         )
+        refresh_item = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Refresh Now", b"refreshNow:", ""
+        )
+        refresh_item.setTarget_(self._delegate)
         quit_item = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
             "Quit", b"quit:", ""
         )
@@ -87,6 +95,8 @@ class HolotekApp:
         menu.addItem_(self._info_item)
         menu.addItem_(self._temp_item)
         menu.addItem_(self._time_item)
+        menu.addItem_(AppKit.NSMenuItem.separatorItem())
+        menu.addItem_(refresh_item)
         menu.addItem_(AppKit.NSMenuItem.separatorItem())
         menu.addItem_(quit_item)
 
@@ -119,12 +129,31 @@ class HolotekApp:
             result = poll_step(self.mon, self.state, self.cfg)
             if result.ppm is None:
                 log.warning("no CO2 reading this tick")
+                self._sensor_unavailable = True
             else:
+                self._sensor_unavailable = False
                 self._latest = (result.ppm, result.temp_c, result.zone, time.strftime("%H:%M:%S"), result.trend)
                 log.info("CO2=%s ppm zone=%s trend=%s notify=%s", result.ppm, result.zone, result.trend, bool(result.notifications))
                 self._pending_notify.extend(result.notifications)
 
             time.sleep(self.cfg.get("poll_interval_seconds", 120))
+
+    def _refresh_now(self, sender):
+        threading.Thread(target=self._do_refresh, daemon=True).start()
+
+    def _do_refresh(self):
+        if self.mon is None or not self.mon.is_alive:
+            self.mon = reconnect(self.cfg, attempts=1)
+        if self.mon is None:
+            self._sensor_unavailable = True
+            return
+        result = poll_step(self.mon, self.state, self.cfg)
+        if result.ppm is None:
+            self._sensor_unavailable = True
+            return
+        self._sensor_unavailable = False
+        self._latest = (result.ppm, result.temp_c, result.zone, time.strftime("%H:%M:%S"), result.trend)
+        self._pending_notify.extend(result.notifications)
 
     def _deliver_notification(self, title, body):
         if self._un_center is not None:
@@ -160,7 +189,11 @@ class HolotekApp:
             marker_key = z
         
         self._status_item.button().setTitle_(MARKERS.get(marker_key, MARKERS["green"]))
-        if latest is not None:
+        if self._sensor_unavailable:
+            self._info_item.setTitle_("CO₂: sensor unavailable")
+            self._temp_item.setTitle_("")
+            self._time_item.setTitle_("")
+        elif latest is not None:
             ppm, temp_c, zone_name, ts, _ = latest
             self._info_item.setTitle_(f"CO₂: {ppm} ppm ({zone_name or ''})")
             self._temp_item.setTitle_(f"Temp: {temp_c:.1f}°C" if temp_c is not None else "")
