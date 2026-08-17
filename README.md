@@ -1,10 +1,10 @@
 # holotek — CO₂ Monitor Notification Daemon / Мониторинг CO₂ с уведомлениями
 
-**EN:** Python CLI daemon that reads CO₂ ppm from a USB zyTemp (Holtek) HID device on macOS and fires native notifications on zone transitions. [🌐 Landing page](https://dimasmagadan.github.io/holotek/) · [📦 Device on Ozon](https://www.ozon.ru/product/detektor-uglekislogo-gaza-dadzhet-izmeritel-co2-datchik-co2-analizator-vozduha-227430204/)
+**EN:** Python CLI daemon that reads CO₂ ppm from a USB zyTemp (Holtek) HID device on macOS and fires native notifications on zone transitions. Tested against **rev 2.00** devices (plaintext packets); older rev 1.00 devices use encrypted packets and are not supported — they will show a permanent "no CO2 reading". [🌐 Landing page](https://dimasmagadan.github.io/holotek/) · [📦 Device on Ozon](https://www.ozon.ru/product/detektor-uglekislogo-gaza-dadzhet-izmeritel-co2-datchik-co2-analizator-vozduha-227430204/)
 
 ---
 
-Python-демон для macOS, который читает концентрацию CO₂ с USB-датчика zyTemp (Holtek) и отправляет системные уведомления при переходе между зонами (норма → повышение → опасно).
+Python-демон для macOS, который читает концентрацию CO₂ с USB-датчика zyTemp (Holtek) и отправляет системные уведомления при переходе между зонами (норма → повышение → опасно). Проверено на устройствах **rev 2.00** (пакеты в открытом виде); старые rev 1.00 шифруют пакеты и не поддерживаются — будет постоянная ошибка «no CO2 reading».
 
 🌐 [Лендинг](https://dimasmagadan.github.io/holotek/) · 🛒 [Датчик на Ozon](https://www.ozon.ru/product/detektor-uglekislogo-gaza-dadzhet-izmeritel-co2-datchik-co2-analizator-vozduha-227430204/) · 💻 [Репозиторий](https://github.com/Dimasmagadan/holotek)
 
@@ -22,8 +22,11 @@ Python-демон для macOS, который читает концентрац
 
 ```bash
 brew install libusb hidapi
-pip install -r requirements.txt
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
 ```
+
+`start.sh` и `Holotek Launcher.app` запускают именно `.venv/bin/python3` — без этого шага они не стартуют.
 
 Проверить, что датчик определяется:
 

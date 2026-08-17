@@ -73,12 +73,16 @@ def main():
         HolotekApp(config_path=config_path).run()
         return
 
-    cfg = load_config(config_path)
+    try:
+        cfg = load_config(config_path)
+    except Exception as e:
+        sys.exit(f"holotek: failed to load config {config_path}: {e}")
     mon = reconnect(cfg, attempts=None)
     state = {"last_zone": None, "last_notified_at": None, "last_notified_ppm": None}
 
     def on_sigint(*_):
         log.info("bye")
+        mon.invalidate()
         sys.exit(0)
 
     signal.signal(signal.SIGINT, on_sigint)

@@ -6,6 +6,7 @@ from unittest.mock import patch, MagicMock
 from core import (
     decide, zone, validate, load_config, CONFIG_PATH, MESSAGES, read_sensors,
     detect_trend, poll_step, reconnect, TickResult, _drain_hid, _DeviceHandle,
+    send_notification,
 )
 
 
@@ -298,6 +299,25 @@ class TestValidate:
     def test_trend_cooldown_negative_rejected(self):
         v = mkconfig()
         v["trend_cooldown_seconds"] = -1
+        with pytest.raises(ValueError):
+            validate(v)
+
+    @pytest.mark.parametrize("key", [
+        "poll_interval_seconds", "notification_cooldown_seconds", "green_reentry_drop_ppm",
+    ])
+    def test_bool_numeric_fields_rejected(self, key):
+        """bool is an int subclass \u2014 True/False must not silently pass as 1/0."""
+        v = mkconfig()
+        v[key] = True
+        with pytest.raises(ValueError):
+            validate(v)
+
+    @pytest.mark.parametrize("key", [
+        "poll_interval_seconds", "notification_cooldown_seconds", "green_reentry_drop_ppm",
+    ])
+    def test_string_numeric_fields_rejected_with_valueerror(self, key):
+        v = mkconfig()
+        v[key] = "120"
         with pytest.raises(ValueError):
             validate(v)
 
@@ -600,6 +620,24 @@ class TestPollStep:
             assert result.trend == "rising"
             fired.append(("CO₂ rising fast", f"{ppm} ppm") in result.notifications)
         assert fired == [True, False, False]
+
+
+# ── send_notification() ────────────────────────────────────────────────
+
+class TestSendNotification:
+    def test_logs_warning_on_nonzero_exit(self, caplog):
+        fake_result = MagicMock(returncode=1)
+        with patch("core.subprocess.run", return_value=fake_result):
+            with caplog.at_level("WARNING", logger="holotek.core"):
+                send_notification("title", "body")
+        assert any("osascript" in r.message for r in caplog.records)
+
+    def test_no_warning_on_success(self, caplog):
+        fake_result = MagicMock(returncode=0)
+        with patch("core.subprocess.run", return_value=fake_result):
+            with caplog.at_level("WARNING", logger="holotek.core"):
+                send_notification("title", "body")
+        assert caplog.records == []
 
 
 # ── reconnect() / _DeviceHandle ──────────────────────────────────────────

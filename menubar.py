@@ -23,6 +23,17 @@ MARKERS = {
 }
 
 
+def _format_age(seconds):
+    seconds = max(0, int(seconds))
+    if seconds < 60:
+        return f"{seconds}s ago"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes}m ago"
+    hours = minutes // 60
+    return f"{hours}h ago"
+
+
 class _AppDelegate(NSObject):
     def applicationDidFinishLaunching_(self, notification):
         self._app_ref.on_launched()
@@ -40,10 +51,15 @@ class _AppDelegate(NSObject):
 class HolotekApp:
     def __init__(self, config_path="config.json"):
         self.config_path = config_path
-        self.cfg = load_config(self.config_path)
+        try:
+            self.cfg = load_config(self.config_path)
+        except Exception as e:
+            log.error("startup config load failed (%s): %s", config_path, e)
+            raise SystemExit(f"holotek: failed to load config {config_path}: {e}")
         self.mon = None
         self.state = {"last_zone": None, "last_notified_at": None, "last_notified_ppm": None}
-        self._latest = None  # (ppm, temp_c, zone, timestamp, trend), set atomically
+        self._lock = threading.Lock()  # serializes device I/O + state between poll loop and Refresh Now
+        self._latest = None  # (ppm, temp_c, zone, epoch, trend), set atomically
         self._pending_notify = []
         self._status_item = None
         self._delegate = None
@@ -110,6 +126,8 @@ class HolotekApp:
         NSRunLoop.currentRunLoop().addTimer_forMode_(self._timer, NSDefaultRunLoopMode)
 
     def _quit(self, sender):
+        if self.mon is not None:
+            self.mon.invalidate()
         AppKit.NSApplication.sharedApplication().terminate_(None)
 
     def _poll_loop(self):
@@ -119,22 +137,24 @@ class HolotekApp:
             except Exception as e:
                 log.warning("config reload failed: %s", e)
 
-            if self.mon is None or not self.mon.is_alive:
-                log.warning("device gone; reconnecting")
-                self.mon = reconnect(self.cfg)
-                if self.mon is None:
-                    time.sleep(self.cfg.get("poll_interval_seconds", 120))
-                    continue
+            with self._lock:
+                if self.mon is None or not self.mon.is_alive:
+                    log.warning("device gone; reconnecting")
+                    self._sensor_unavailable = True
+                    self.mon = reconnect(self.cfg)
+                    if self.mon is None:
+                        time.sleep(self.cfg.get("poll_interval_seconds", 120))
+                        continue
 
-            result = poll_step(self.mon, self.state, self.cfg)
-            if result.ppm is None:
-                log.warning("no CO2 reading this tick")
-                self._sensor_unavailable = True
-            else:
-                self._sensor_unavailable = False
-                self._latest = (result.ppm, result.temp_c, result.zone, time.strftime("%H:%M:%S"), result.trend)
-                log.info("CO2=%s ppm zone=%s trend=%s notify=%s", result.ppm, result.zone, result.trend, bool(result.notifications))
-                self._pending_notify.extend(result.notifications)
+                result = poll_step(self.mon, self.state, self.cfg)
+                if result.ppm is None:
+                    log.warning("no CO2 reading this tick")
+                    self._sensor_unavailable = True
+                else:
+                    self._sensor_unavailable = False
+                    self._latest = (result.ppm, result.temp_c, result.zone, time.time(), result.trend)
+                    log.info("CO2=%s ppm zone=%s trend=%s notify=%s", result.ppm, result.zone, result.trend, bool(result.notifications))
+                    self._pending_notify.extend(result.notifications)
 
             time.sleep(self.cfg.get("poll_interval_seconds", 120))
 
@@ -142,18 +162,20 @@ class HolotekApp:
         threading.Thread(target=self._do_refresh, daemon=True).start()
 
     def _do_refresh(self):
-        if self.mon is None or not self.mon.is_alive:
-            self.mon = reconnect(self.cfg, attempts=1)
-        if self.mon is None:
-            self._sensor_unavailable = True
-            return
-        result = poll_step(self.mon, self.state, self.cfg)
-        if result.ppm is None:
-            self._sensor_unavailable = True
-            return
-        self._sensor_unavailable = False
-        self._latest = (result.ppm, result.temp_c, result.zone, time.strftime("%H:%M:%S"), result.trend)
-        self._pending_notify.extend(result.notifications)
+        with self._lock:
+            if self.mon is None or not self.mon.is_alive:
+                self._sensor_unavailable = True
+                self.mon = reconnect(self.cfg, attempts=1)
+            if self.mon is None:
+                self._sensor_unavailable = True
+                return
+            result = poll_step(self.mon, self.state, self.cfg)
+            if result.ppm is None:
+                self._sensor_unavailable = True
+                return
+            self._sensor_unavailable = False
+            self._latest = (result.ppm, result.temp_c, result.zone, time.time(), result.trend)
+            self._pending_notify.extend(result.notifications)
 
     def _deliver_notification(self, title, body):
         if self._un_center is not None:
@@ -166,7 +188,7 @@ class HolotekApp:
                     f"holotek-{time.time()}", content, None
                 )
                 self._un_center.addNotificationRequest_withCompletionHandler_(
-                    req, lambda err: None
+                    req, lambda err: err and log.warning("notification delivery failed: %s", err)
                 )
                 return
             except Exception as e:
@@ -194,10 +216,10 @@ class HolotekApp:
             self._temp_item.setTitle_("")
             self._time_item.setTitle_("")
         elif latest is not None:
-            ppm, temp_c, zone_name, ts, _ = latest
+            ppm, temp_c, zone_name, epoch, _ = latest
             self._info_item.setTitle_(f"CO₂: {ppm} ppm ({zone_name or ''})")
             self._temp_item.setTitle_(f"Temp: {temp_c:.1f}°C" if temp_c is not None else "")
-            self._time_item.setTitle_(f"as of {ts}")
+            self._time_item.setTitle_(f"updated {_format_age(time.time() - epoch)}")
         while self._pending_notify:
             title, body = self._pending_notify.pop(0)
             self._deliver_notification(title, body)

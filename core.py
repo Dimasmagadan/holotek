@@ -32,12 +32,15 @@ def validate(cfg):
             raise ValueError(f"{key} must be a non-negative int")
     if t["green_max"] > t["yellow_max"]:
         raise ValueError("green_max must be <= yellow_max")
-    if cfg["poll_interval_seconds"] <= 0:
-        raise ValueError("poll_interval_seconds must be > 0")
-    if cfg["notification_cooldown_seconds"] < 0:
-        raise ValueError("notification_cooldown_seconds must be >= 0")
-    if cfg["green_reentry_drop_ppm"] < 0:
-        raise ValueError("green_reentry_drop_ppm must be >= 0")
+    v = cfg["poll_interval_seconds"]
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0:
+        raise ValueError("poll_interval_seconds must be a number > 0")
+    v = cfg["notification_cooldown_seconds"]
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0:
+        raise ValueError("notification_cooldown_seconds must be a number >= 0")
+    v = cfg["green_reentry_drop_ppm"]
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0:
+        raise ValueError("green_reentry_drop_ppm must be a number >= 0")
     if "trend_window_seconds" in cfg:
         v = cfg["trend_window_seconds"]
         if not isinstance(v, int) or isinstance(v, bool) or v < 120:
@@ -178,7 +181,9 @@ def send_notification(title, body):
     """Fire a macOS notification via osascript. Fixed 2-arg signature."""
     esc = lambda s: str(s).replace("\\", "\\\\").replace('"', '\\"')
     script = f'display notification "{esc(body)}" with title "{esc(title)}"'
-    subprocess.run(["osascript", "-e", script], check=False)
+    result = subprocess.run(["osascript", "-e", script], check=False)
+    if result.returncode != 0:
+        log.warning("osascript notification failed with exit code %d", result.returncode)
 
 
 def detect_trend(state, ppm, now, cfg):
