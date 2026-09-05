@@ -93,7 +93,7 @@ def main():
         except Exception as e:
             log.warning("config reload failed: %s", e)
 
-        if not mon.is_alive:
+        if mon is None or not mon.is_alive:
             log.warning("device gone; reconnecting")
             mon = reconnect(cfg)
             if mon is None:

@@ -1,5 +1,6 @@
 import json
 import logging
+import math
 import subprocess
 import time
 from collections import deque
@@ -33,22 +34,22 @@ def validate(cfg):
     if t["green_max"] > t["yellow_max"]:
         raise ValueError("green_max must be <= yellow_max")
     v = cfg["poll_interval_seconds"]
-    if isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0:
-        raise ValueError("poll_interval_seconds must be a number > 0")
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0 or not math.isfinite(v):
+        raise ValueError("poll_interval_seconds must be a finite number > 0")
     v = cfg["notification_cooldown_seconds"]
-    if isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0:
-        raise ValueError("notification_cooldown_seconds must be a number >= 0")
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0 or not math.isfinite(v):
+        raise ValueError("notification_cooldown_seconds must be a finite number >= 0")
     v = cfg["green_reentry_drop_ppm"]
-    if isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0:
-        raise ValueError("green_reentry_drop_ppm must be a number >= 0")
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0 or not math.isfinite(v):
+        raise ValueError("green_reentry_drop_ppm must be a finite number >= 0")
     if "trend_window_seconds" in cfg:
         v = cfg["trend_window_seconds"]
         if not isinstance(v, int) or isinstance(v, bool) or v < 120:
             raise ValueError("trend_window_seconds must be an int >= 120")
     if "trend_alert_ppm_per_min" in cfg:
         v = cfg["trend_alert_ppm_per_min"]
-        if not isinstance(v, (int, float)) or isinstance(v, bool) or v <= 0:
-            raise ValueError("trend_alert_ppm_per_min must be a positive number")
+        if not isinstance(v, (int, float)) or isinstance(v, bool) or v <= 0 or not math.isfinite(v):
+            raise ValueError("trend_alert_ppm_per_min must be a finite positive number")
     if "trend_cooldown_seconds" in cfg:
         v = cfg["trend_cooldown_seconds"]
         if not isinstance(v, int) or isinstance(v, bool) or v < 0:

@@ -20,6 +20,7 @@ MARKERS = {
     "yellow_down": "🟡↓",
     "red_up": "🔴↑",
     "red_down": "🔴↓",
+    "unavailable": "⚪",
 }
 
 
@@ -141,20 +142,18 @@ class HolotekApp:
                 if self.mon is None or not self.mon.is_alive:
                     log.warning("device gone; reconnecting")
                     self._sensor_unavailable = True
-                    self.mon = reconnect(self.cfg)
-                    if self.mon is None:
-                        time.sleep(self.cfg.get("poll_interval_seconds", 120))
-                        continue
+                    self.mon = reconnect(self.cfg, attempts=1)
 
-                result = poll_step(self.mon, self.state, self.cfg)
-                if result.ppm is None:
-                    log.warning("no CO2 reading this tick")
-                    self._sensor_unavailable = True
-                else:
-                    self._sensor_unavailable = False
-                    self._latest = (result.ppm, result.temp_c, result.zone, time.time(), result.trend)
-                    log.info("CO2=%s ppm zone=%s trend=%s notify=%s", result.ppm, result.zone, result.trend, bool(result.notifications))
-                    self._pending_notify.extend(result.notifications)
+                if self.mon is not None:
+                    result = poll_step(self.mon, self.state, self.cfg)
+                    if result.ppm is None:
+                        log.warning("no CO2 reading this tick")
+                        self._sensor_unavailable = True
+                    else:
+                        self._sensor_unavailable = False
+                        self._latest = (result.ppm, result.temp_c, result.zone, time.time(), result.trend)
+                        log.info("CO2=%s ppm zone=%s trend=%s notify=%s", result.ppm, result.zone, result.trend, bool(result.notifications))
+                        self._pending_notify.extend(result.notifications)
 
             time.sleep(self.cfg.get("poll_interval_seconds", 120))
 
@@ -203,7 +202,9 @@ class HolotekApp:
         z = latest[2] if latest else "green"
         trend = latest[4] if latest else None
         
-        if trend == "rising":
+        if self._sensor_unavailable:
+            marker_key = "unavailable"
+        elif trend == "rising":
             marker_key = f"{z}_up"
         elif trend == "falling":
             marker_key = f"{z}_down"
